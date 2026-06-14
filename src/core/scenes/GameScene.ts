@@ -31,6 +31,17 @@ const NODE_AMOUNT = 120; // ferraille par gisement
 const CARRY_CAPACITY = 15; // ferraille transportée par voyage
 const GATHER_TIME = 1200; // ms pour miner une charge
 
+// Production
+const UNIT_COST = 20; // ferraille par unité
+const BUILD_TIME = 3000; // ms de production
+
+// Combat
+const ATTACK_RANGE = 105; // px
+const ATTACK_DAMAGE = 12;
+const ATTACK_CD = 700; // ms entre deux coups
+const AGGRO_RANGE = 320; // px : portée de détection des ennemis
+const DEATH_REMOVE_MS = 1200; // délai avant disparition du corps
+
 interface PropDef {
   key: string;
   col: number;
@@ -86,6 +97,7 @@ export class GameScene extends Phaser.Scene {
   private pathGfx!: Phaser.GameObjects.Graphics;
   private selectionGfx!: Phaser.GameObjects.Graphics;
   private selBoxGfx!: Phaser.GameObjects.Graphics;
+  private hpGfx!: Phaser.GameObjects.Graphics;
   private gridVisible = true;
 
   private units: Unit[] = [];
@@ -98,6 +110,11 @@ export class GameScene extends Phaser.Scene {
   private scrap = 0;
   private scrapText!: Phaser.GameObjects.Text;
   private readonly depotAnchor: Cell = { col: 7, row: 6 }; // case du bâtiment (HQ)
+
+  // Production
+  private prodQueue = 0;
+  private prodTimer = 0;
+  private prodText!: Phaser.GameObjects.Text;
 
   // sélection (clic gauche)
   private selecting = false;
@@ -129,6 +146,14 @@ export class GameScene extends Phaser.Scene {
       frameHeight: 128,
     });
     this.load.spritesheet("survivor-run", "../units/survivor-run.png", {
+      frameWidth: 128,
+      frameHeight: 128,
+    });
+    this.load.spritesheet("survivor-attack", "../units/survivor-attack.png", {
+      frameWidth: 128,
+      frameHeight: 128,
+    });
+    this.load.spritesheet("survivor-die", "../units/survivor-die.png", {
       frameWidth: 128,
       frameHeight: 128,
     });
@@ -178,11 +203,39 @@ export class GameScene extends Phaser.Scene {
         frameRate: 14,
         repeat: -1,
       });
+      this.anims.create({
+        key: `surv-attack-${r}`,
+        frames: this.anims.generateFrameNumbers("survivor-attack", {
+          start: r * 14,
+          end: r * 14 + 13,
+        }),
+        frameRate: 16,
+        repeat: -1,
+      });
+      this.anims.create({
+        key: `surv-die-${r}`,
+        frames: this.anims.generateFrameNumbers("survivor-die", {
+          start: r * 14,
+          end: r * 14 + 13,
+        }),
+        frameRate: 12,
+        repeat: 0,
+      });
     }
 
     for (const c of START_CELLS) {
-      this.units.push(new Unit(this, this.grid, c, "surv"));
+      this.units.push(new Unit(this, this.grid, c, "surv", "player"));
     }
+    // Ennemis
+    for (const c of [
+      { col: 16, row: 15 },
+      { col: 17, row: 16 },
+      { col: 15, row: 16 },
+    ]) {
+      this.units.push(new Unit(this, this.grid, c, "surv", "enemy"));
+    }
+
+    this.hpGfx = this.add.graphics().setDepth(90000);
 
     // Gisements de ferraille
     this.addNode(13, 6, NODE_AMOUNT);
@@ -197,11 +250,14 @@ export class GameScene extends Phaser.Scene {
   override update(_time: number, delta: number): void {
     this.panWithKeys(delta);
     this.edgeScroll(delta);
+    this.processCombat(delta);
+    this.processProduction(delta);
     for (const u of this.units) u.update(delta);
     this.processHarvest(delta);
     this.resolveSeparation();
     this.drawPaths();
     this.drawSelection();
+    this.drawHpBars();
   }
 
   // --- Rendu ---
@@ -374,6 +430,134 @@ export class GameScene extends Phaser.Scene {
     return result;
   }
 
+  // --- Production ---
+
+  private processProduction(delta: number): void {
+    if (this.prodQueue > 0) {
+      this.prodTimer += delta;
+      if (this.prodTimer >= BUILD_TIME) {
+        this.prodTimer = 0;
+        this.prodQueue--;
+        this.spawnPlayerUnit();
+      }
+    } else {
+      this.prodTimer = 0;
+    }
+    this.updateProdText();
+  }
+
+  private spawnPlayerUnit(): void {
+    const spot =
+      this.adjacentFreeCell(this.depotAnchor.col, this.depotAnchor.row, this.depotAnchor, null) ??
+      { col: this.depotAnchor.col + 1, row: this.depotAnchor.row + 1 };
+    this.units.push(new Unit(this, this.grid, spot, "surv", "player"));
+  }
+
+  private updateProdText(): void {
+    const pct = this.prodQueue > 0 ? Math.floor((this.prodTimer / BUILD_TIME) * 100) : 0;
+    const status = this.prodQueue > 0 ? `${this.prodQueue} en file — ${pct}%` : "—";
+    this.prodText.setText(`🏭 Production : ${status}   (T = produire, ${UNIT_COST} ferraille)`);
+  }
+
+  // --- Combat ---
+
+  private nearestFoe(u: Unit, range: number): Unit | null {
+    let best: Unit | null = null;
+    let bestD = range * range;
+    for (const o of this.units) {
+      if (o.dead || o.team === u.team) continue;
+      const d = (o.body.x - u.body.x) ** 2 + (o.body.y - u.body.y) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = o;
+      }
+    }
+    return best;
+  }
+
+  private processCombat(delta: number): void {
+    // IA ennemie : acquiert la cible joueur la plus proche
+    for (const u of this.units) {
+      if (u.dead || u.team !== "enemy") continue;
+      if (!u.attackTarget || u.attackTarget.dead) {
+        u.attackTarget = this.nearestFoe(u, AGGRO_RANGE);
+      }
+    }
+
+    for (const u of this.units) {
+      if (u.dead) continue;
+      const t = u.attackTarget;
+      if (!t || t.dead) {
+        u.attackTarget = null;
+        u.attacking = false;
+        continue;
+      }
+      const dx = t.body.x - u.body.x;
+      const dy = t.body.y - u.body.y;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist <= ATTACK_RANGE) {
+        u.attacking = true;
+        if (u.isMoving) u.stop();
+        u.faceTo(dx, dy);
+        u.combatTimer -= delta;
+        if (u.combatTimer <= 0) {
+          u.combatTimer = ATTACK_CD;
+          this.applyDamage(u, t);
+        }
+      } else {
+        u.attacking = false;
+        u.combatTimer = 0;
+        const tcell = worldToCell(this.grid, t.body.x, t.body.y);
+        const key = this.cellKey(tcell.col, tcell.row);
+        if (key !== u.chaseKey || !u.isMoving) {
+          u.chaseKey = key;
+          const path = findPath(this.nav, u.cell, tcell);
+          if (path) u.setPath(path);
+        }
+      }
+    }
+  }
+
+  private applyDamage(attacker: Unit, target: Unit): void {
+    const died = target.takeDamage(ATTACK_DAMAGE);
+    // riposte : un joueur attaqué et oisif se défend
+    if (
+      target.team === "player" &&
+      !target.attackTarget &&
+      !this.jobs.has(target)
+    ) {
+      target.attackTarget = attacker;
+    }
+    if (died) this.onUnitDead(target);
+  }
+
+  private onUnitDead(u: Unit): void {
+    this.selected = this.selected.filter((x) => x !== u);
+    this.clearJob(u);
+    for (const o of this.units) if (o.attackTarget === u) o.attackTarget = null;
+    this.time.delayedCall(DEATH_REMOVE_MS, () => {
+      this.units = this.units.filter((x) => x !== u);
+      u.body.destroy();
+    });
+  }
+
+  private drawHpBars(): void {
+    this.hpGfx.clear();
+    for (const u of this.units) {
+      if (u.dead) continue;
+      const w = 36;
+      const h = 5;
+      const x = u.body.x - w / 2;
+      const y = u.body.y - 78;
+      const ratio = Phaser.Math.Clamp(u.hp / u.maxHp, 0, 1);
+      this.hpGfx.fillStyle(0x000000, 0.6);
+      this.hpGfx.fillRect(x - 1, y - 1, w + 2, h + 2);
+      this.hpGfx.fillStyle(u.team === "enemy" ? 0xff5555 : 0x55dd55, 1);
+      this.hpGfx.fillRect(x, y, w * ratio, h);
+    }
+  }
+
   // --- Économie ---
 
   private addNode(col: number, row: number, amount: number): void {
@@ -452,6 +636,7 @@ export class GameScene extends Phaser.Scene {
 
   private assignHarvest(u: Unit, node: ResourceNode): void {
     this.clearJob(u);
+    u.attackTarget = null;
     const job: HarvestJob = { node, state: "toNode", timer: 0, carrying: 0, spot: null };
     this.jobs.set(u, job);
     this.gotoReserve(job, u, this.adjacentFreeCell(node.col, node.row, u.cell, job.spot));
@@ -612,11 +797,22 @@ export class GameScene extends Phaser.Scene {
       this.gridVisible = !this.gridVisible;
       this.drawGrid();
     });
+
+    // Produire une unité (dépense de la ferraille)
+    this.input.keyboard?.on("keydown-T", () => {
+      if (this.scrap >= UNIT_COST) {
+        this.scrap -= UNIT_COST;
+        this.updateScrapText();
+        this.prodQueue++;
+      }
+    });
   }
 
   private selectSingle(p: Phaser.Input.Pointer): void {
     const w = this.cameras.main.getWorldPoint(p.x, p.y);
-    const u = this.units.find((unit) => unit.hitTest(w.x, w.y));
+    const u = this.units.find(
+      (unit) => unit.team === "player" && !unit.dead && unit.hitTest(w.x, w.y),
+    );
     this.selected = u ? [u] : [];
   }
 
@@ -626,7 +822,13 @@ export class GameScene extends Phaser.Scene {
     const y1 = Math.min(this.selStart.y, this.selCur.y);
     const y2 = Math.max(this.selStart.y, this.selCur.y);
     this.selected = this.units.filter(
-      (u) => u.body.x >= x1 && u.body.x <= x2 && u.body.y >= y1 && u.body.y <= y2,
+      (u) =>
+        u.team === "player" &&
+        !u.dead &&
+        u.body.x >= x1 &&
+        u.body.x <= x2 &&
+        u.body.y >= y1 &&
+        u.body.y <= y2,
     );
   }
 
@@ -634,6 +836,18 @@ export class GameScene extends Phaser.Scene {
     if (this.selected.length === 0) return;
     const w = this.cameras.main.getWorldPoint(p.x, p.y);
     const goal = worldToCell(this.grid, w.x, w.y);
+
+    // Clic sur un ennemi -> ordre d'attaque
+    const foe = this.units.find(
+      (u) => u.team === "enemy" && !u.dead && u.hitTest(w.x, w.y),
+    );
+    if (foe) {
+      for (const u of this.selected) {
+        this.clearJob(u);
+        u.attackTarget = foe;
+      }
+      return;
+    }
 
     // Clic sur un gisement -> ordre de récolte
     const node = this.nodeAt(goal, w);
@@ -647,6 +861,7 @@ export class GameScene extends Phaser.Scene {
     const dests = this.freeCellsAround(goal, this.selected.length);
     this.selected.forEach((u, i) => {
       this.clearJob(u);
+      u.attackTarget = null;
       const dest = dests[i] ?? goal;
       const path = findPath(this.nav, u.cell, dest);
       if (path) u.setPath(path);
@@ -659,9 +874,9 @@ export class GameScene extends Phaser.Scene {
         12,
         12,
         [
-          "Phase 1 — multi-unités + économie",
-          "Clic gauche : sélection (clic = 1 unité, glisser = rectangle)",
-          "Clic droit : déplacer le groupe, OU clic droit sur un tas de ferraille = récolter",
+          "Phase 1 — multi-unités, économie & combat",
+          "Clic gauche : sélection · Clic droit : déplacer / récolter (ferraille) / attaquer (ennemi rouge)",
+          "Les ennemis attaquent si tu t'approches. Barres de vie au-dessus des unités.",
           "Caméra : bords de l'écran, flèches, ou clic-molette · Molette : zoom · G : grille",
         ],
         {
@@ -686,5 +901,17 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(1000000);
     this.updateScrapText();
+
+    this.prodText = this.add
+      .text(12, 132, "", {
+        fontFamily: "monospace",
+        fontSize: "15px",
+        color: "#9fd0ff",
+        backgroundColor: "#000000cc",
+        padding: { x: 10, y: 6 },
+      })
+      .setScrollFactor(0)
+      .setDepth(1000000);
+    this.updateProdText();
   }
 }
