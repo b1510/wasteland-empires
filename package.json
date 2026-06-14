@@ -1,0 +1,21 @@
+{
+  "name": "wasteland-empires",
+  "version": "0.0.1",
+  "description": "RTS isométrique post-apocalyptique — jeu de stratégie web (Phaser 4 + TypeScript).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "phaser": "^4.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0"
+  }
+}

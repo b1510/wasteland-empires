@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.local
+.DS_Store
+.vite/
+*.log
+
+# Licensed third-party asset packs — NE PAS committer (licence "No Redistribution")
+/PostApocalypse_AssetPack_v1.1.2/
+/Golbanc Homestead v1.6.1/
+/FREE Character 16-bit Thug Outlined/
+/FREE Character HD Survivor W Bike/
+/public/assets/golbanc/
+/public/assets/units/

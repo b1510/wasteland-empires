@@ -32,7 +32,7 @@ Le joueur ne doit pas seulement « développer une base ». Il doit aussi gérer
 
 Pour un jeu 2D isométrique browser-native, ambitieux, solo et multijoueur, la recommandation principale est :
 
-- **Frontend jeu** : Phaser 4
+- **Frontend jeu** : Phaser 4 (sorti en 2026, désormais la version recommandée pour tout nouveau projet)
 - **Langage** : TypeScript
 - **Build tool** : Vite
 - **Backend multijoueur** : Node.js + Socket.io
@@ -43,7 +43,7 @@ Pour un jeu 2D isométrique browser-native, ambitieux, solo et multijoueur, la r
 
 ### Pourquoi ne pas partir sur Three.js
 
-Three.js est excellent pour le rendu 3D et certaines expériences interactives, mais il n'est pas pensé comme un moteur 2D orienté RTS. Pour un jeu isométrique avec sélection d'unités, gestion de tilemaps, HUD, logique de combat, pathfinding, états d'unités et simulation multijoueur, il obligerait à reconstruire beaucoup de briques fondamentales.
+Three.js est excellent pour le rendu 3D et certaines expériences interactives, mais il n'est pas pensé comme un moteur 2D orienté RTS. Pour un jeu isométrique avec sélection d'unités, gestion de tilemaps, HUD, logique de combat, pathfinding, états d'unités et simulation multijoueur, il obligerait à reconstruire beaucoup de briques fondamentales. Phaser 4 fournit ces briques nativement.
 
 Three.js peut rester utile plus tard pour :
 
@@ -66,6 +66,25 @@ Ses avantages dans ce projet :
 - Connexion naturelle à un backend Node.js.
 - Déploiement web direct, sans friction de distribution.
 - Facilité d'intégrer des outils maison, de l'IA de gameplay et des pipelines de génération de contenu.
+
+### Ce que Phaser 4 apporte de plus pour ce projet
+
+Phaser 4 (2026) est une réécriture majeure du moteur, particulièrement pertinente pour un RTS avec beaucoup d'unités et une ambiance post-apo travaillée :
+
+- **Nouveau moteur de rendu (architecture RenderNode)** : remplace l'ancien système de pipelines. Chaque nœud fait une seule chose, ce qui rend le rendu plus rapide et plus modulaire.
+- **Sprite GPU Layer** : capable d'afficher plus d'un million de sprites à l'écran, jusqu'à 100x plus vite que Phaser 3. Atout direct pour un RTS affichant de grandes armées, de nombreux projectiles et des effets de combat simultanés.
+- **Système de filtres unifié** : FX et masques (deux systèmes séparés en Phaser 3) fusionnent en un seul système de filtres empilables (bloom, glow, blur, ombre, color grading, transitions, éclairage par image). Idéal pour l'ambiance « néons mourants, pluie acide, radiation » du projet.
+- **Éclairage simplifié** (`sprite.setLighting(true)`), avec auto-ombres et hauteur de lumière explicite, fonctionnant sur la plupart des game objects.
+- **Système de teinte (tint) revu** : couleur et mode séparés, avec 6 modes (MULTIPLY, FILL, ADD, SCREEN, OVERLAY, HARD_LIGHT). Pratique pour le feedback visuel (sélection, dégâts, factions, état machine).
+- **Nouveaux game objects** : Gradient, Noise (Cell/Simplex 2D/3D/4D), CaptureFrame, Stamp — utiles pour la génération procédurale de terrain et les effets d'environnement.
+
+Points d'attention (le projet partant de zéro, l'impact est faible) :
+
+- Les pipelines WebGL custom doivent être écrits sous forme de **render nodes** (pas de portage à prévoir ici, mais à garder en tête si on intègre des shaders maison).
+- Plusieurs API changent par rapport à Phaser 3 : `setTintFill()` → `setTint()` + `setTintMode()`, `Geom.Point` → `Vector2`, `Set`/`Map` natifs JS, `BitmapMask` → filtre `Mask`, `DynamicTexture` nécessite un `render()` explicite.
+- Game objects supprimés : Mesh et Plane, plugins Camera3D/Layer3D, support IE9. Spine 3/4 n'est plus maintenu.
+
+Comme le projet démarre directement sur Phaser 4, aucune migration n'est nécessaire : il suffit de cibler les API v4 dès le départ.
 
 ## Vision du gameplay
 
@@ -678,7 +697,7 @@ Une bande-son hybride peut fonctionner :
 
 ### Frontend
 
-- Phaser 4 pour rendu et boucle de jeu.
+- Phaser 4 pour rendu et boucle de jeu (architecture RenderNode, Sprite GPU Layer, système de filtres unifié).
 - TypeScript pour robustesse et scalabilité.
 - Vite pour le dev rapide.
 - Organisation ECS légère ou architecture modulaire orientée systèmes.
