@@ -5,10 +5,12 @@ dist/
 .vite/
 *.log
 
-# Licensed third-party asset packs — NE PAS committer (licence "No Redistribution")
+# Packs sources complets — NE PAS committer (licence "No Redistribution")
 /PostApocalypse_AssetPack_v1.1.2/
 /Golbanc Homestead v1.6.1/
 /FREE Character 16-bit Thug Outlined/
 /FREE Character HD Survivor W Bike/
-/public/assets/golbanc/
-/public/assets/units/
+
+# NB : seuls les quelques assets RÉELLEMENT utilisés sont committés (public/assets/*)
+# pour faire fonctionner le déploiement. Repo gardé PRIVÉ (licence No-Redistribution).
+# Long terme : remplacer par des assets librement redistribuables (CC0 / génération IA).
