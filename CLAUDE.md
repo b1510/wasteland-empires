@@ -55,7 +55,9 @@ Alias d'import : `@/*` → `src/*`.
   - **Production par bâtiment** : la caserne se sélectionne (clic → contour iso du footprint), `T` met en file (coût ferraille), spawn en sortie de bâtiment, **point de ralliement** au clic droit.
   - **3 ressources** data-driven (`content/resources.ts`) : ferraille ⛏, carburant ⛽ (citerne jaune), eau 💧 (mare). Gisements récoltables (récolte → dépôt → compteurs HUD). Coûts construction/prod restent en ferraille pour l'instant.
   - **Map 40×40** (vs 20×20) : 2 bases opposées (joueur HG / ennemi BD), gisements répartis (ferraille près des bases, carburant/eau au centre contestés), décor + barrière diagonale. Fond peint mis à l'échelle pour couvrir la grille.
-- ⬜ **Reste Phase 2** : 2-3 types d'unités distincts (un seul « surv » pour l'instant), première carte vraiment travaillée (choke points), calage visuel fin des nouveaux décors (ox/oy de crate/building-b/tree-a approximés).
+  - **Types d'unités** data-driven (`content/units.ts`) : récupérateur (R, rapide/fragile), fusilier (F, à distance + FX de tir), costaud (V, lent/tanky). Stats par type (hp/vitesse/dégâts/portée/cooldown) ; teinte de rôle côté joueur. Caserne produit une file mixte (R/F/V).
+  - **HUD refait** : chips ressources colorées, bandeau prod (caserne sélectionnée), aide togglable (H). **Lisible à tout zoom** (`layoutHud` : ancrage écran + contre-scale 1/zoom chaque frame).
+- ⬜ **Reste Phase 2** : première carte vraiment travaillée (choke points), sprites distincts par unité (même spritesheet pour l'instant), calage visuel fin des décors (ox/oy de crate/building-b/tree-a/fuel approximés).
 
 ### Assets (état)
 - **Terrain/décor** : pack "Golbanc Homestead" (Starlight Furnace), iso. Cartes faites main (pas de procédural).
