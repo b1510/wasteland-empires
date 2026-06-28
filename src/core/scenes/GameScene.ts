@@ -24,6 +24,8 @@ const GRID_COLS = 20;
 const GRID_ROWS = 20;
 const CLICK_THRESHOLD = 6;
 const SEPARATION_DIST = 42; // px : distance mini entre deux unités
+const SEP_STRENGTH = 200; // intensité de l'évitement (px/s)
+const SEP_TANGENT = 0.7; // biais tangentiel : fait dévier sur le côté
 const PAN_SPEED = 700; // px/s (flèches)
 
 // Économie
@@ -102,6 +104,11 @@ export class GameScene extends Phaser.Scene {
 
   private units: Unit[] = [];
   private selected: Unit[] = [];
+
+  // Groupes de contrôle (Ctrl+[1-9] assigne, [1-9] rappelle, double-tap = centrer)
+  private groups = new Map<number, Unit[]>();
+  private lastGroupKey = -1;
+  private lastGroupTime = 0;
 
   // Économie
   private nodes: ResourceNode[] = [];
@@ -252,9 +259,12 @@ export class GameScene extends Phaser.Scene {
     this.edgeScroll(delta);
     this.processCombat(delta);
     this.processProduction(delta);
-    for (const u of this.units) u.update(delta);
+    const sep = this.computeSeparation();
+    for (let i = 0; i < this.units.length; i++) {
+      this.units[i].update(delta, sep[i].x, sep[i].y);
+    }
     this.processHarvest(delta);
-    this.resolveSeparation();
+    this.resolveStuck(delta);
     this.drawPaths();
     this.drawSelection();
     this.drawHpBars();
@@ -354,52 +364,89 @@ export class GameScene extends Phaser.Scene {
   // --- Simulation ---
 
   /**
-   * Collision basique : repousse les unités trop proches. Asymétrique — seule
-   * l'unité EN MOUVEMENT est déplacée si elle bute sur une unité à l'arrêt
-   * (l'immobile garde sa place, celle qui bouge la contourne).
+   * Vélocité de séparation par unité (évitement). Renvoie un tableau aligné sur
+   * this.units. Inclut un biais TANGENTIEL pour que les unités se contournent
+   * (même de face) et une asymétrie : une unité immobile n'est pas poussée par
+   * une unité en mouvement (elle garde sa place, l'autre la contourne).
    */
-  private resolveSeparation(): void {
-    for (let i = 0; i < this.units.length; i++) {
-      for (let j = i + 1; j < this.units.length; j++) {
-        const ua = this.units[i];
-        const ub = this.units[j];
-        const a = ua.body;
-        const b = ub.body;
+  private computeSeparation(): { x: number; y: number }[] {
+    const res = this.units.map(() => ({ x: 0, y: 0 }));
+    const n = this.units.length;
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const a = this.units[i].body;
+        const b = this.units[j].body;
         const dx = b.x - a.x;
         const dy = b.y - a.y;
         const d = Math.hypot(dx, dy);
         if (d <= 0 || d >= SEPARATION_DIST) continue;
 
-        const overlap = SEPARATION_DIST - d;
+        const force = ((SEPARATION_DIST - d) / SEPARATION_DIST) * SEP_STRENGTH;
         const nx = dx / d;
         const ny = dy / d;
-        const am = ua.isMoving;
-        const bm = ub.isMoving;
+        // composante radiale (éloigne) + tangentielle (fait dévier sur le côté)
+        const ax = -(nx + -ny * SEP_TANGENT) * force;
+        const ay = -(ny + nx * SEP_TANGENT) * force;
 
-        // part de poussée pour a et pour b
-        let sa = 0.5;
-        let sb = 0.5;
+        const am = this.units[i].isMoving;
+        const bm = this.units[j].isMoving;
+        let si = 0.5;
+        let sj = 0.5;
         if (am && !bm) {
-          sa = 1;
-          sb = 0;
+          si = 1;
+          sj = 0;
         } else if (!am && bm) {
-          sa = 0;
-          sb = 1;
+          si = 0;
+          sj = 1;
         }
 
-        a.x -= nx * overlap * sa;
-        a.y -= ny * overlap * sa;
-        b.x += nx * overlap * sb;
-        b.y += ny * overlap * sb;
-        a.setDepth(a.y);
-        b.setDepth(b.y);
+        res[i].x += ax * si;
+        res[i].y += ay * si;
+        res[j].x -= ax * sj;
+        res[j].y -= ay * sj;
       }
     }
+    return res;
   }
 
   /** Une unité (à l'arrêt) occupe-t-elle cette case ? */
   private isOccupied(col: number, row: number): boolean {
     return this.units.some((u) => u.cell.col === col && u.cell.row === row);
+  }
+
+  /**
+   * Détecte les unités coincées (qui n'avancent plus alors qu'elles ont un
+   * chemin) et leur recalcule un trajet qui CONTOURNE les unités immobiles.
+   */
+  private resolveStuck(delta: number): void {
+    const minProgress = (60 * delta) / 1000; // avance attendue mini (~vitesse/4)
+    for (const u of this.units) {
+      if (u.dead || !u.isMoving) {
+        u.stuckMs = 0;
+        u.lastX = u.body.x;
+        u.lastY = u.body.y;
+        continue;
+      }
+      const moved = Math.hypot(u.body.x - u.lastX, u.body.y - u.lastY);
+      u.lastX = u.body.x;
+      u.lastY = u.body.y;
+      u.stuckMs = moved < minProgress ? u.stuckMs + delta : 0;
+      if (u.stuckMs > 350) {
+        u.stuckMs = 0;
+        this.repathAround(u);
+      }
+    }
+  }
+
+  private repathAround(u: Unit): void {
+    if (!u.finalGoal) return;
+    const blocked = new Set<number>();
+    for (const o of this.units) {
+      if (o === u || o.dead || o.isMoving) continue; // seules les immobiles bloquent
+      blocked.add(this.cellKey(o.cell.col, o.cell.row));
+    }
+    const path = findPath(this.nav, u.cell, u.finalGoal, blocked);
+    if (path && path.length > 0) u.setPath(path);
   }
 
   /** N cases marchables et libres les plus proches d'un objectif (formation). */
@@ -779,10 +826,11 @@ export class GameScene extends Phaser.Scene {
       if (p.button === 0 && this.selecting) {
         this.selecting = false;
         this.selBoxGfx.clear();
+        const additive = (p.event as MouseEvent | undefined)?.shiftKey ?? false;
         const moved =
           Phaser.Math.Distance.Between(this.downX, this.downY, p.x, p.y) > CLICK_THRESHOLD;
-        if (moved) this.selectInBox();
-        else this.selectSingle(p);
+        if (moved) this.selectInBox(additive);
+        else this.selectSingle(p, additive);
       }
     });
 

@@ -36,12 +36,19 @@ interface Node {
   f: number;
 }
 
-export function findPath(grid: Grid, start: Cell, goal: Cell): Cell[] | null {
-  if (!grid.isWalkable(goal.col, goal.row)) return null;
-  if (start.col === goal.col && start.row === goal.row) return [];
-
+export function findPath(
+  grid: Grid,
+  start: Cell,
+  goal: Cell,
+  extraBlocked?: ReadonlySet<number>,
+): Cell[] | null {
   const cols = grid.cols;
   const key = (c: number, r: number): number => r * cols + c;
+  const walkable = (c: number, r: number): boolean =>
+    grid.isWalkable(c, r) && !(extraBlocked !== undefined && extraBlocked.has(key(c, r)));
+
+  if (!walkable(goal.col, goal.row)) return null;
+  if (start.col === goal.col && start.row === goal.row) return [];
   const h = (c: number, r: number): number => {
     const dc = Math.abs(c - goal.col);
     const dr = Math.abs(r - goal.row);
@@ -79,10 +86,10 @@ export function findPath(grid: Grid, start: Cell, goal: Cell): Cell[] | null {
     for (const d of DIRS) {
       const nc = cur.col + d.dc;
       const nr = cur.row + d.dr;
-      if (!grid.isWalkable(nc, nr)) continue;
+      if (!walkable(nc, nr)) continue;
       if (d.dc !== 0 && d.dr !== 0) {
-        if (!grid.isWalkable(cur.col + d.dc, cur.row)) continue;
-        if (!grid.isWalkable(cur.col, cur.row + d.dr)) continue;
+        if (!walkable(cur.col + d.dc, cur.row)) continue;
+        if (!walkable(cur.col, cur.row + d.dr)) continue;
       }
       const nk = key(nc, nr);
       if (closed.has(nk)) continue;

@@ -10,7 +10,8 @@ import { cellToWorld, type Cell, type IsoGrid, type Point } from "@/world/iso";
  */
 
 const SPEED = 240;
-const ARRIVE_EPS = 2;
+const ARRIVE_EPS = 4;
+const WAYPOINT_RADIUS = 26; // rayon pour valider une case intermédiaire
 const PICK_RADIUS = 40;
 const SCALE = 1.8;
 
@@ -35,6 +36,12 @@ export class Unit {
   combatTimer = 0;
   chaseKey = -1;
 
+  // anti-blocage (piloté par la scène)
+  finalGoal: Cell | null = null;
+  stuckMs = 0;
+  lastX = 0;
+  lastY = 0;
+
   private grid: IsoGrid;
   private path: Cell[] = [];
   private target: Point;
@@ -53,12 +60,15 @@ export class Unit {
       .setOrigin(0.485, 0.695)
       .setScale(SCALE);
     this.body.setDepth(w.y);
+    this.lastX = w.x;
+    this.lastY = w.y;
     if (team === "enemy") this.body.setTint(0xff6b6b);
     this.setAnim("idle", this.facing);
   }
 
   setPath(path: Cell[]): void {
     this.path = path.slice();
+    this.finalGoal = path.length > 0 ? { ...path[path.length - 1] } : null;
     this.advanceTarget();
   }
 
@@ -98,29 +108,49 @@ export class Unit {
     this.body.play(`${this.animBase}-die-${this.facing}`);
   }
 
-  update(deltaMs: number): void {
+  /**
+   * @param sepX,sepY vélocité de séparation (évitement) fournie par la scène.
+   * Le déplacement = vélocité de poursuite (vers la case) + séparation, intégrées
+   * ensemble -> les unités contournent au lieu de se bloquer.
+   */
+  update(deltaMs: number, sepX = 0, sepY = 0): void {
     if (this.dead) return;
+    const dt = deltaMs / 1000;
+
+    let vx = 0;
+    let vy = 0;
+    let seeking = false;
 
     if (this.path.length > 0) {
-      const dx = this.target.x - this.body.x;
-      const dy = this.target.y - this.body.y;
-      const dist = Math.hypot(dx, dy);
-      const step = (SPEED * deltaMs) / 1000;
-      if (dist <= ARRIVE_EPS || dist <= step) {
-        this.body.setPosition(this.target.x, this.target.y);
+      let dx = this.target.x - this.body.x;
+      let dy = this.target.y - this.body.y;
+      let dist = Math.hypot(dx, dy);
+      const radius = this.path.length > 1 ? WAYPOINT_RADIUS : ARRIVE_EPS;
+      if (dist <= radius) {
         this.cell = this.path.shift()!;
         this.advanceTarget();
-      } else {
-        this.body.x += (dx / dist) * step;
-        this.body.y += (dy / dist) * step;
-        this.setAnim("run", dirToRow(dx, dy));
+        dx = this.target.x - this.body.x;
+        dy = this.target.y - this.body.y;
+        dist = Math.hypot(dx, dy);
       }
-      this.body.setDepth(this.body.y);
-      return;
+      if (this.path.length > 0 && dist > 0.001) {
+        vx = (dx / dist) * SPEED;
+        vy = (dy / dist) * SPEED;
+        seeking = true;
+      }
     }
 
-    // à l'arrêt : attaque ou idle (la scène pilote `attacking`/`facing`)
-    this.setAnim(this.attacking ? "attack" : "idle", this.facing);
+    vx += sepX;
+    vy += sepY;
+    this.body.x += vx * dt;
+    this.body.y += vy * dt;
+    this.body.setDepth(this.body.y);
+
+    if (seeking && Math.hypot(vx, vy) > 1) {
+      this.setAnim("run", dirToRow(vx, vy));
+    } else {
+      this.setAnim(this.attacking ? "attack" : "idle", this.facing);
+    }
   }
 
   hitTest(x: number, y: number): boolean {
