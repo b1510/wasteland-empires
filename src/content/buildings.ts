@@ -17,15 +17,6 @@ export interface TurretSpec {
   cooldown: number;
 }
 
-export interface ProduceSpec {
-  /** Base d'animation de l'unité produite (ex. "surv"). */
-  unitAnim: string;
-  /** Coût en ferraille par unité. */
-  cost: number;
-  /** Temps de production (ms). */
-  buildTime: number;
-}
-
 export interface BuildingDef {
   id: string;
   name: string;
@@ -45,8 +36,8 @@ export interface BuildingDef {
   tint?: number;
   /** Comportement défensif optionnel. */
   turret?: TurretSpec;
-  /** Production d'unités optionnelle. */
-  produces?: ProduceSpec;
+  /** Ids d'unités (cf. content/units.ts) que ce bâtiment peut produire. */
+  produces?: string[];
 }
 
 export const BUILDINGS: BuildingDef[] = [
@@ -63,7 +54,7 @@ export const BUILDINGS: BuildingDef[] = [
     hp: 320,
     hotkey: "C",
     tint: 0xa8c8ff,
-    produces: { unitAnim: "surv", cost: 20, buildTime: 3000 },
+    produces: ["scout", "rifle", "heavy"],
   },
   {
     id: "turret",

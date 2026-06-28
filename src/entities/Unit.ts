@@ -1,15 +1,16 @@
 import Phaser from "phaser";
 import { cellToWorld, type Cell, type IsoGrid, type Point } from "@/world/iso";
+import type { UnitDef } from "@/content/units";
 
 /**
  * Unité jouable / ennemie — Phase 1+.
  *
  * Rendu : sprite animé 8 directions (idle / run / attack / die).
+ * Stats : portées par un `UnitDef` data-driven (hp, vitesse, dégâts, portée…).
  * Logique : suit un CHEMIN de cases (A*), interpolé case par case ; combat et
  * IA orchestrés par la scène (qui pilote attackTarget / attacking).
  */
 
-const SPEED = 240;
 const ARRIVE_EPS = 4;
 const WAYPOINT_RADIUS = 26; // rayon pour valider une case intermédiaire
 const PICK_RADIUS = 40;
@@ -25,9 +26,10 @@ function dirToRow(dx: number, dy: number): number {
 export class Unit {
   readonly body: Phaser.GameObjects.Sprite;
   readonly team: Team;
+  readonly def: UnitDef;
   cell: Cell;
-  maxHp = 60;
-  hp = 60;
+  maxHp: number;
+  hp: number;
   dead = false;
 
   // combat (piloté par la scène)
@@ -48,21 +50,26 @@ export class Unit {
   private animBase: string;
   private facing = 2;
 
-  constructor(scene: Phaser.Scene, grid: IsoGrid, cell: Cell, animBase: string, team: Team = "player") {
+  constructor(scene: Phaser.Scene, grid: IsoGrid, cell: Cell, def: UnitDef, team: Team = "player") {
     this.grid = grid;
     this.team = team;
+    this.def = def;
+    this.maxHp = def.maxHp;
+    this.hp = def.maxHp;
     this.cell = { ...cell };
-    this.animBase = animBase;
+    this.animBase = def.animBase;
     const w = cellToWorld(grid, cell.col, cell.row);
     this.target = { x: w.x, y: w.y };
     this.body = scene.add
-      .sprite(w.x, w.y, `${animBase}-idle-${this.facing}`)
+      .sprite(w.x, w.y, `${this.animBase}-idle-${this.facing}`)
       .setOrigin(0.485, 0.695)
       .setScale(SCALE);
     this.body.setDepth(w.y);
     this.lastX = w.x;
     this.lastY = w.y;
+    // ennemi = rouge ; sinon teinte de rôle éventuelle
     if (team === "enemy") this.body.setTint(0xff6b6b);
+    else if (def.tint !== undefined) this.body.setTint(def.tint);
     this.setAnim("idle", this.facing);
   }
 
@@ -134,8 +141,8 @@ export class Unit {
         dist = Math.hypot(dx, dy);
       }
       if (this.path.length > 0 && dist > 0.001) {
-        vx = (dx / dist) * SPEED;
-        vy = (dy / dist) * SPEED;
+        vx = (dx / dist) * this.def.speed;
+        vy = (dy / dist) * this.def.speed;
         seeking = true;
       }
     }

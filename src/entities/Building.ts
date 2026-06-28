@@ -19,8 +19,8 @@ export class Building {
   dead = false;
   /** Compte à rebours de tir (tourelles), piloté par la scène. */
   cooldown = 0;
-  /** File de production et progression (bâtiments producteurs), pilotées par la scène. */
-  queue = 0;
+  /** File de production (ids d'unités) et progression de la tête, pilotées par la scène. */
+  queue: string[] = [];
   prodTimer = 0;
   /** Point de ralliement des unités produites. */
   rally: Cell | null = null;

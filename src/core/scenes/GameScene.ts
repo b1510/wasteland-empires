@@ -13,6 +13,7 @@ import { Unit } from "@/entities/Unit";
 import { Building } from "@/entities/Building";
 import { BUILDINGS, buildingByHotkey, type BuildingDef } from "@/content/buildings";
 import { RESOURCES, RESOURCE_TYPES, type ResourceType } from "@/content/resources";
+import { UNITS, isRanged } from "@/content/units";
 
 /**
  * Phase 1 — prototype moteur.
@@ -36,10 +37,7 @@ const NODE_AMOUNT = 120; // ferraille par gisement
 const CARRY_CAPACITY = 15; // ferraille transportée par voyage
 const GATHER_TIME = 1200; // ms pour miner une charge
 
-// Combat
-const ATTACK_RANGE = 105; // px
-const ATTACK_DAMAGE = 12;
-const ATTACK_CD = 700; // ms entre deux coups
+// Combat (les stats d'attaque par unité viennent de content/units.ts)
 const AGGRO_RANGE = 320; // px : portée de détection des ennemis
 const DEATH_REMOVE_MS = 1200; // délai avant disparition du corps
 
@@ -142,8 +140,12 @@ export class GameScene extends Phaser.Scene {
   private jobs = new Map<Unit, HarvestJob>();
   private reserved = new Set<number>(); // cases réservées par les récolteurs
   private stock: Record<ResourceType, number> = { scrap: 0, fuel: 0, water: 0 };
-  private resourceText!: Phaser.GameObjects.Text;
   private readonly depotAnchor: Cell = { col: 7, row: 6 }; // case du bâtiment (HQ)
+
+  // HUD — texts repositionnés/échelonnés chaque frame par layoutHud (lisible à tout zoom)
+  private resChips: Phaser.GameObjects.Text[] = [];
+  private helpText!: Phaser.GameObjects.Text;
+  private helpVisible = true;
 
   // Production (file portée par chaque caserne ; ce texte reflète la sélection)
   private prodText!: Phaser.GameObjects.Text;
@@ -273,12 +275,14 @@ export class GameScene extends Phaser.Scene {
       });
     }
 
-    for (const c of START_CELLS) {
-      this.units.push(new Unit(this, this.grid, c, "surv", "player"));
-    }
-    for (const c of ENEMY_CELLS) {
-      this.units.push(new Unit(this, this.grid, c, "surv", "enemy"));
-    }
+    const startComp = ["scout", "scout", "rifle", "rifle", "heavy"];
+    START_CELLS.forEach((c, i) => {
+      this.units.push(new Unit(this, this.grid, c, UNITS[startComp[i] ?? "scout"], "player"));
+    });
+    const enemyComp = ["rifle", "rifle", "heavy"];
+    ENEMY_CELLS.forEach((c, i) => {
+      this.units.push(new Unit(this, this.grid, c, UNITS[enemyComp[i] ?? "rifle"], "enemy"));
+    });
 
     this.hpGfx = this.add.graphics().setDepth(90000);
     this.fxGfx = this.add.graphics().setDepth(85000);
@@ -316,6 +320,7 @@ export class GameScene extends Phaser.Scene {
     this.drawSelection();
     this.drawHpBars();
     this.drawTurretFx(delta);
+    this.layoutHud();
   }
 
   // --- Rendu ---
@@ -589,35 +594,34 @@ export class GameScene extends Phaser.Scene {
 
   private processProduction(delta: number): void {
     for (const b of this.buildings) {
-      const spec = b.def.produces;
-      if (b.dead || !spec || b.queue <= 0) continue;
+      if (b.dead || b.queue.length === 0) continue;
+      const def = UNITS[b.queue[0]];
       b.prodTimer += delta;
-      if (b.prodTimer >= spec.buildTime) {
+      if (b.prodTimer >= def.buildTime) {
         b.prodTimer = 0;
-        b.queue--;
-        this.spawnFromBuilding(b);
+        b.queue.shift();
+        this.spawnFromBuilding(b, def.id);
       }
     }
     this.updateProdText();
   }
 
-  /** Met une unité en file sur la caserne sélectionnée (débite la ferraille). */
-  private queueProduction(): void {
+  /** Met un type d'unité en file sur la caserne sélectionnée (débite la ferraille). */
+  private queueUnit(unitId: string): void {
     const b = this.selectedBuilding;
-    if (!b || b.dead || !b.def.produces) return;
-    const spec = b.def.produces;
-    if (this.stock.scrap < spec.cost) return;
-    this.stock.scrap -= spec.cost;
+    if (!b || b.dead || !b.def.produces?.includes(unitId)) return;
+    const def = UNITS[unitId];
+    if (this.stock.scrap < def.cost) return;
+    this.stock.scrap -= def.cost;
     this.updateResourceText();
-    b.queue++;
+    b.queue.push(unitId);
     this.updateProdText();
   }
 
-  private spawnFromBuilding(b: Building): void {
-    const spec = b.def.produces!;
+  private spawnFromBuilding(b: Building, unitId: string): void {
     const exit: Cell = { col: b.cell.col, row: b.cell.row + b.def.rows };
     const spot = this.freeCellsAround(exit, 1)[0] ?? exit;
-    const u = new Unit(this, this.grid, spot, spec.unitAnim, "player");
+    const u = new Unit(this, this.grid, spot, UNITS[unitId], "player");
     this.units.push(u);
     if (b.rally) {
       const path = findPath(this.nav, u.cell, b.rally);
@@ -628,14 +632,17 @@ export class GameScene extends Phaser.Scene {
   private updateProdText(): void {
     const b = this.selectedBuilding;
     if (b && !b.dead && b.def.produces) {
-      const spec = b.def.produces;
-      const pct = b.queue > 0 ? Math.floor((b.prodTimer / spec.buildTime) * 100) : 0;
-      const status = b.queue > 0 ? `${b.queue} en file — ${pct}%` : "—";
-      this.prodText.setText(
-        `🏭 ${b.def.name} : ${status}   (T = produire ${spec.cost} ferraille · clic droit = ralliement)`,
-      );
+      const menu = b.def.produces
+        .map((id) => `${UNITS[id].hotkey}:${UNITS[id].name}(${UNITS[id].cost})`)
+        .join("  ");
+      let status = "—";
+      if (b.queue.length > 0) {
+        const pct = Math.floor((b.prodTimer / UNITS[b.queue[0]].buildTime) * 100);
+        status = `${UNITS[b.queue[0]].name} ${pct}% (+${b.queue.length - 1} en file)`;
+      }
+      this.prodText.setText(`🏭 ${b.def.name} — ${menu}\n   En cours : ${status} · clic droit = ralliement`);
     } else {
-      this.prodText.setText("🏭 Production : sélectionne une caserne (clic) puis T");
+      this.prodText.setText("🏭 Sélectionne une caserne (clic) pour produire des unités");
     }
   }
 
@@ -676,13 +683,13 @@ export class GameScene extends Phaser.Scene {
       const dy = t.body.y - u.body.y;
       const dist = Math.hypot(dx, dy);
 
-      if (dist <= ATTACK_RANGE) {
+      if (dist <= u.def.range) {
         u.attacking = true;
         if (u.isMoving) u.stop();
         u.faceTo(dx, dy);
         u.combatTimer -= delta;
         if (u.combatTimer <= 0) {
-          u.combatTimer = ATTACK_CD;
+          u.combatTimer = u.def.attackCd;
           this.applyDamage(u, t);
         }
       } else {
@@ -700,7 +707,17 @@ export class GameScene extends Phaser.Scene {
   }
 
   private applyDamage(attacker: Unit, target: Unit): void {
-    const died = target.takeDamage(ATTACK_DAMAGE);
+    // feedback visuel pour les unités à distance (réutilise le calque FX des tourelles)
+    if (isRanged(attacker.def)) {
+      this.shots.push({
+        x1: attacker.body.x,
+        y1: attacker.body.y - 36,
+        x2: target.body.x,
+        y2: target.body.y - 34,
+        ttl: 80,
+      });
+    }
+    const died = target.takeDamage(attacker.def.damage);
     // riposte : un joueur attaqué et oisif se défend
     if (
       target.team === "player" &&
@@ -909,14 +926,14 @@ export class GameScene extends Phaser.Scene {
       const dx = b.x - u.body.x;
       const dy = b.y - u.body.y;
       const dist = Math.hypot(dx, dy);
-      if (dist <= ATTACK_RANGE + 36) {
+      if (dist <= u.def.range + 36) {
         if (u.isMoving) u.stop();
         u.faceTo(dx, dy);
         u.attacking = true;
         u.combatTimer -= delta;
         if (u.combatTimer <= 0) {
-          u.combatTimer = ATTACK_CD;
-          if (b.takeDamage(ATTACK_DAMAGE)) this.onBuildingDead(b);
+          u.combatTimer = u.def.attackCd;
+          if (b.takeDamage(u.def.damage)) this.onBuildingDead(b);
         }
       } else {
         u.attacking = false;
@@ -1097,8 +1114,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateResourceText(): void {
-    const parts = RESOURCE_TYPES.map((t) => `${RESOURCES[t].icon} ${this.stock[t]}`);
-    this.resourceText.setText(parts.join("    "));
+    RESOURCE_TYPES.forEach((t, i) =>
+      this.resChips[i]?.setText(`${RESOURCES[t].icon} ${this.stock[t]}`),
+    );
   }
 
   // --- Caméra & input ---
@@ -1206,14 +1224,21 @@ export class GameScene extends Phaser.Scene {
       this.drawGrid();
     });
 
-    // Produire une unité depuis la caserne sélectionnée
-    this.input.keyboard?.on("keydown-T", () => this.queueProduction());
+    // Production : chaque type d'unité a sa touche (active si une caserne est sélectionnée)
+    for (const def of Object.values(UNITS)) {
+      this.input.keyboard?.on(`keydown-${def.hotkey}`, () => this.queueUnit(def.id));
+    }
 
     // Construction : raccourcis du catalogue (B tourelle, N mur…) + Échap pour annuler
     for (const b of BUILDINGS) {
       this.input.keyboard?.on(`keydown-${b.hotkey}`, () => this.toggleBuild(b.hotkey));
     }
     this.input.keyboard?.on("keydown-ESC", () => this.cancelBuild());
+
+    // Aide : afficher/masquer le bandeau de contrôles
+    this.input.keyboard?.on("keydown-H", () => {
+      this.helpVisible = !this.helpVisible;
+    });
 
     // Groupes de contrôle : Ctrl+[1-9] assigne, [1-9] rappelle (double-tap = centrer).
     // addCapture empêche le navigateur d'intercepter Ctrl+chiffre (changement d'onglet).
@@ -1366,64 +1391,75 @@ export class GameScene extends Phaser.Scene {
   }
 
   private addHud(): void {
-    this.add
+    const panel = (size: number, color: string, bg = "#0c1218e6"): Phaser.GameObjects.Text =>
+      this.add
+        .text(0, 0, "", {
+          fontFamily: "monospace",
+          fontSize: `${size}px`,
+          color,
+          backgroundColor: bg,
+          padding: { x: 10, y: 6 },
+        })
+        .setOrigin(0, 0)
+        .setDepth(1000000);
+
+    // Bandeau ressources : une chip colorée par ressource
+    this.resChips = RESOURCE_TYPES.map((t) => panel(20, RESOURCES[t].color));
+    this.updateResourceText();
+
+    this.prodText = panel(14, "#bcdcff");
+    this.updateProdText();
+
+    this.buildText = panel(14, "#e6caff");
+    this.updateBuildText();
+
+    this.helpText = this.add
       .text(
-        12,
-        12,
+        0,
+        0,
         [
-          "Phase 1 — multi-unités, économie & combat",
-          "Clic gauche : sélection (rectangle) · Maj+clic : ajouter/retirer de la sélection",
-          "Clic droit : déplacer / récolter (ferraille ⛏ · carburant ⛽ · eau 💧) / attaquer (ennemi rouge)",
-          "Groupes : Ctrl+[1-9] assigne · [1-9] rappelle (double-tap = recentrer)",
-          "Construire : C (caserne) / B (tourelle) / N (mur) — clic gauche pose, Échap annule",
-          "Caserne : la sélectionner (clic) puis T pour produire · clic droit = ralliement",
-          "Caméra : bords de l'écran, flèches, ou clic-molette · Molette : zoom · G : grille",
+          "Sélection : clic · glisser · Maj+clic ajoute      Groupes : Ctrl+[1-9] puis [1-9]",
+          "Clic droit : déplacer · récolter · attaquer      Construire : C caserne · B tourelle · N mur (Échap annule)",
+          "Caserne sélectionnée : R/F/V produit · clic droit = ralliement      Caméra : bords · flèches · clic-molette · molette",
+          "G : grille      H : afficher/masquer cette aide",
         ],
         {
           fontFamily: "monospace",
-          fontSize: "13px",
-          color: "#c9f7e8",
-          backgroundColor: "#000000cc",
-          padding: { x: 8, y: 6 },
+          fontSize: "12px",
+          color: "#9fb4c4",
+          backgroundColor: "#0a0e12dd",
+          padding: { x: 10, y: 6 },
+          lineSpacing: 3,
         },
       )
-      .setScrollFactor(0)
+      .setOrigin(0, 0)
       .setDepth(1000000);
 
-    this.resourceText = this.add
-      .text(12, 92, "", {
-        fontFamily: "monospace",
-        fontSize: "18px",
-        color: "#e8e0c0",
-        backgroundColor: "#000000cc",
-        padding: { x: 10, y: 6 },
-      })
-      .setScrollFactor(0)
-      .setDepth(1000000);
-    this.updateResourceText();
+    this.layoutHud();
+  }
 
-    this.prodText = this.add
-      .text(12, 132, "", {
-        fontFamily: "monospace",
-        fontSize: "15px",
-        color: "#9fd0ff",
-        backgroundColor: "#000000cc",
-        padding: { x: 10, y: 6 },
-      })
-      .setScrollFactor(0)
-      .setDepth(1000000);
-    this.updateProdText();
-
-    this.buildText = this.add
-      .text(12, 168, "", {
-        fontFamily: "monospace",
-        fontSize: "15px",
-        color: "#d7b0ff",
-        backgroundColor: "#000000cc",
-        padding: { x: 10, y: 6 },
-      })
-      .setScrollFactor(0)
-      .setDepth(1000000);
-    this.updateBuildText();
+  /**
+   * Positionne et met à l'échelle le HUD chaque frame selon le zoom caméra : chaque
+   * élément est ancré à une position ÉCRAN (via getWorldPoint) et contre-scalé par
+   * 1/zoom → taille de police constante, lisible quel que soit le dézoom.
+   */
+  private layoutHud(): void {
+    const cam = this.cameras.main;
+    const inv = 1 / cam.zoom;
+    const place = (t: Phaser.GameObjects.Text, sx: number, sy: number): void => {
+      t.setScale(inv);
+      const w = cam.getWorldPoint(sx, sy);
+      t.setPosition(w.x, w.y);
+    };
+    // width/height intrinsèques (non scalés) = dimensions écran, car scale·zoom = 1
+    let x = 12;
+    for (const chip of this.resChips) {
+      place(chip, x, 12);
+      x += chip.width + 8;
+    }
+    place(this.prodText, 12, 52);
+    place(this.buildText, 12, 52 + this.prodText.height + 6);
+    this.helpText.setVisible(this.helpVisible);
+    if (this.helpVisible) place(this.helpText, 12, cam.height - this.helpText.height - 12);
   }
 }
