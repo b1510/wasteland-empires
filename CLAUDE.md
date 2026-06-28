@@ -53,7 +53,9 @@ Alias d'import : `@/*` → `src/*`.
   - Ennemi simple + boucle de combat (aggro, riposte, barres de vie, mort).
   - **Construction de bâtiments** data-driven (`content/buildings.ts`, `entities/Building.ts`) : mode placement (ghost + validation footprint + coût), footprint bloqué sur la grille de nav. Tourelle défensive (tir hitscan + FX), mur, **caserne**. Ennemis assiègent les bâtiments (boucle attaque/défense fermée).
   - **Production par bâtiment** : la caserne se sélectionne (clic → contour iso du footprint), `T` met en file (coût ferraille), spawn en sortie de bâtiment, **point de ralliement** au clic droit.
-- ⬜ **Reste Phase 2** : 2e ressource, 2-3 types d'unités distincts (un seul « surv » pour l'instant), première carte lisible.
+  - **3 ressources** data-driven (`content/resources.ts`) : ferraille ⛏, carburant ⛽ (citerne jaune), eau 💧 (mare). Gisements récoltables (récolte → dépôt → compteurs HUD). Coûts construction/prod restent en ferraille pour l'instant.
+  - **Map 40×40** (vs 20×20) : 2 bases opposées (joueur HG / ennemi BD), gisements répartis (ferraille près des bases, carburant/eau au centre contestés), décor + barrière diagonale. Fond peint mis à l'échelle pour couvrir la grille.
+- ⬜ **Reste Phase 2** : 2-3 types d'unités distincts (un seul « surv » pour l'instant), première carte vraiment travaillée (choke points), calage visuel fin des nouveaux décors (ox/oy de crate/building-b/tree-a approximés).
 
 ### Assets (état)
 - **Terrain/décor** : pack "Golbanc Homestead" (Starlight Furnace), iso. Cartes faites main (pas de procédural).

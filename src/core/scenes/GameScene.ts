@@ -12,6 +12,7 @@ import { findPath } from "@/world/pathfinding";
 import { Unit } from "@/entities/Unit";
 import { Building } from "@/entities/Building";
 import { BUILDINGS, buildingByHotkey, type BuildingDef } from "@/content/buildings";
+import { RESOURCES, RESOURCE_TYPES, type ResourceType } from "@/content/resources";
 
 /**
  * Phase 1 — prototype moteur.
@@ -22,8 +23,8 @@ import { BUILDINGS, buildingByHotkey, type BuildingDef } from "@/content/buildin
  *  - Caméra : clic-molette (glisser) ou flèches ; zoom molette.
  */
 
-const GRID_COLS = 20;
-const GRID_ROWS = 20;
+const GRID_COLS = 40;
+const GRID_ROWS = 40;
 const CLICK_THRESHOLD = 6;
 const SEPARATION_DIST = 42; // px : distance mini entre deux unités
 const SEP_STRENGTH = 200; // intensité de l'évitement (px/s)
@@ -54,26 +55,54 @@ interface PropDef {
 }
 
 // oy calibré visuellement (= bas de bbox - 0.33) pour poser la base sur la case.
+// NB : ox/oy des nouveaux décors (crate, building-b, tree-a) sont approximés et
+// pourront être affinés visuellement (cf. PocScene).
+const TREE_PROP = { scale: 0.4, fw: 1, fh: 1, ox: 0.488, oy: 0.623 };
+const ROCK_PROP = { scale: 0.4, fw: 1, fh: 1, ox: 0.495, oy: 0.625 };
 const PROPS: PropDef[] = [
+  // Base joueur (haut-gauche)
   { key: "building-a", col: 6, row: 5, scale: 0.5, fw: 2, fh: 2, ox: 0.506, oy: 0.646 },
-  { key: "tree-b", col: 9, row: 8, scale: 0.4, fw: 1, fh: 1, ox: 0.488, oy: 0.623 },
-  { key: "rock-a", col: 5, row: 9, scale: 0.4, fw: 1, fh: 1, ox: 0.495, oy: 0.625 },
+  { key: "crate", col: 9, row: 6, scale: 0.4, fw: 1, fh: 1, ox: 0.5, oy: 0.62 },
+  { key: "tree-b", col: 4, row: 9, ...TREE_PROP },
+  // Base ennemie (bas-droite)
+  { key: "building-b", col: 32, row: 32, scale: 0.5, fw: 2, fh: 2, ox: 0.506, oy: 0.646 },
+  { key: "crate", col: 30, row: 34, scale: 0.4, fw: 1, fh: 1, ox: 0.5, oy: 0.62 },
+  { key: "tree-a", col: 35, row: 30, ...TREE_PROP },
+  // Barrière/décor central en diagonale (avec un passage vers row ~20)
+  { key: "tree-a", col: 18, row: 14, ...TREE_PROP },
+  { key: "rock-a", col: 19, row: 16, ...ROCK_PROP },
+  { key: "tree-b", col: 20, row: 18, ...TREE_PROP },
+  { key: "tree-a", col: 22, row: 23, ...TREE_PROP },
+  { key: "rock-a", col: 23, row: 25, ...ROCK_PROP },
+  { key: "tree-b", col: 21, row: 27, ...TREE_PROP },
+  // Décor épars
+  { key: "rock-a", col: 11, row: 28, ...ROCK_PROP },
+  { key: "tree-b", col: 28, row: 10, ...TREE_PROP },
+  { key: "tree-a", col: 13, row: 21, ...TREE_PROP },
+  { key: "rock-a", col: 27, row: 23, ...ROCK_PROP },
 ];
 
-const SCRAP_OY = 0.576; // 0.906 - 0.33
-
 const START_CELLS: Cell[] = [
-  { col: 9, row: 11 },
-  { col: 10, row: 11 },
-  { col: 11, row: 11 },
-  { col: 9, row: 12 },
-  { col: 10, row: 12 },
+  { col: 8, row: 8 },
+  { col: 9, row: 8 },
+  { col: 10, row: 8 },
+  { col: 8, row: 9 },
+  { col: 9, row: 9 },
+];
+
+const ENEMY_CELLS: Cell[] = [
+  { col: 30, row: 31 },
+  { col: 31, row: 30 },
+  { col: 34, row: 31 },
 ];
 
 interface ResourceNode {
+  type: ResourceType;
   col: number;
   row: number;
   amount: number;
+  max: number;
+  baseScale: number;
   sprite: Phaser.GameObjects.Image;
 }
 
@@ -112,8 +141,8 @@ export class GameScene extends Phaser.Scene {
   private nodes: ResourceNode[] = [];
   private jobs = new Map<Unit, HarvestJob>();
   private reserved = new Set<number>(); // cases réservées par les récolteurs
-  private scrap = 0;
-  private scrapText!: Phaser.GameObjects.Text;
+  private stock: Record<ResourceType, number> = { scrap: 0, fuel: 0, water: 0 };
+  private resourceText!: Phaser.GameObjects.Text;
   private readonly depotAnchor: Cell = { col: 7, row: 6 }; // case du bâtiment (HQ)
 
   // Production (file portée par chaque caserne ; ce texte reflète la sélection)
@@ -155,9 +184,14 @@ export class GameScene extends Phaser.Scene {
     this.load.setPath("assets/golbanc");
     this.load.image("ground", "ground-green.png");
     this.load.image("building-a", "building-a.png");
+    this.load.image("building-b", "building-b.png");
+    this.load.image("tree-a", "tree-a.png");
     this.load.image("tree-b", "tree-b.png");
     this.load.image("rock-a", "rock-a.png");
+    this.load.image("crate", "crate.png");
     this.load.image("scrap", "scrap.png");
+    this.load.image("fuel", "fuel.png");
+    this.load.image("water", "water.png");
     this.load.spritesheet("survivor-idle", "../units/survivor-idle.png", {
       frameWidth: 128,
       frameHeight: 128,
@@ -177,8 +211,6 @@ export class GameScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.add.image(0, 0, "ground").setOrigin(0.5, 0.5).setDepth(-100000);
-
     const midCol = (GRID_COLS - 1) / 2;
     const midRow = (GRID_ROWS - 1) / 2;
     this.grid.origin = {
@@ -186,9 +218,10 @@ export class GameScene extends Phaser.Scene {
       y: -((midCol + midRow) * this.grid.tileHeight) / 2,
     };
 
+    this.addGround();
+
     this.nav = new Grid(GRID_COLS, GRID_ROWS);
     for (const p of PROPS) this.nav.blockRect(p.col, p.row, p.fw, p.fh);
-    for (let r = 2; r < 15; r++) if (r !== 8) this.nav.setBlocked(14, r);
 
     this.blockedGfx = this.add.graphics().setDepth(-95000);
     this.gridGfx = this.add.graphics().setDepth(-90000);
@@ -243,21 +276,22 @@ export class GameScene extends Phaser.Scene {
     for (const c of START_CELLS) {
       this.units.push(new Unit(this, this.grid, c, "surv", "player"));
     }
-    // Ennemis
-    for (const c of [
-      { col: 16, row: 15 },
-      { col: 17, row: 16 },
-      { col: 15, row: 16 },
-    ]) {
+    for (const c of ENEMY_CELLS) {
       this.units.push(new Unit(this, this.grid, c, "surv", "enemy"));
     }
 
     this.hpGfx = this.add.graphics().setDepth(90000);
     this.fxGfx = this.add.graphics().setDepth(85000);
 
-    // Gisements de ferraille
-    this.addNode(13, 6, NODE_AMOUNT);
-    this.addNode(4, 13, NODE_AMOUNT);
+    // Gisements : ferraille près des bases, carburant & eau au centre (contestés)
+    this.addNode("scrap", 11, 7, NODE_AMOUNT);
+    this.addNode("scrap", 6, 12, NODE_AMOUNT);
+    this.addNode("scrap", 33, 29, NODE_AMOUNT);
+    this.addNode("scrap", 29, 33, NODE_AMOUNT);
+    this.addNode("fuel", 15, 25, NODE_AMOUNT);
+    this.addNode("fuel", 25, 15, NODE_AMOUNT);
+    this.addNode("water", 9, 23, NODE_AMOUNT);
+    this.addNode("water", 30, 17, NODE_AMOUNT);
 
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.setupCamera();
@@ -285,6 +319,38 @@ export class GameScene extends Phaser.Scene {
   }
 
   // --- Rendu ---
+
+  /**
+   * Fond peint mis à l'échelle pour couvrir toute la grille (la map est désormais
+   * plus grande que l'image source 5178×3009, calibrée à l'origine pour 20×20).
+   * Une seule image étirée = pas de coutures (léger flou assumé, backdrop temporaire).
+   */
+  private addGround(): void {
+    const corners = [
+      cellToWorld(this.grid, 0, 0),
+      cellToWorld(this.grid, GRID_COLS - 1, 0),
+      cellToWorld(this.grid, 0, GRID_ROWS - 1),
+      cellToWorld(this.grid, GRID_COLS - 1, GRID_ROWS - 1),
+    ];
+    const halfW = this.grid.tileWidth / 2;
+    const halfH = this.grid.tileHeight / 2;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const c of corners) {
+      minX = Math.min(minX, c.x - halfW);
+      maxX = Math.max(maxX, c.x + halfW);
+      minY = Math.min(minY, c.y - halfH);
+      maxY = Math.max(maxY, c.y + halfH);
+    }
+    const img = this.add
+      .image((minX + maxX) / 2, (minY + maxY) / 2, "ground")
+      .setOrigin(0.5, 0.5)
+      .setDepth(-100000);
+    const margin = 1.04; // léger débord pour éviter tout liseré aux bords
+    img.setScale(Math.max((maxX - minX) / img.width, (maxY - minY) / img.height) * margin);
+  }
 
   private placeProp(def: PropDef): void {
     const fc = def.col + (def.fw - 1) / 2;
@@ -540,9 +606,9 @@ export class GameScene extends Phaser.Scene {
     const b = this.selectedBuilding;
     if (!b || b.dead || !b.def.produces) return;
     const spec = b.def.produces;
-    if (this.scrap < spec.cost) return;
-    this.scrap -= spec.cost;
-    this.updateScrapText();
+    if (this.stock.scrap < spec.cost) return;
+    this.stock.scrap -= spec.cost;
+    this.updateResourceText();
     b.queue++;
     this.updateProdText();
   }
@@ -743,7 +809,7 @@ export class GameScene extends Phaser.Scene {
     const cw = cellToWorld(this.grid, fc, fr);
     this.ghost.setPosition(cw.x, cw.y).setDepth(95000);
     this.ghostCell = anchor;
-    this.ghostValid = this.canPlace(def, anchor) && this.scrap >= def.cost;
+    this.ghostValid = this.canPlace(def, anchor) && this.stock.scrap >= def.cost;
     this.ghost.setTint(this.ghostValid ? 0x66ff88 : 0xff5566);
   }
 
@@ -752,8 +818,8 @@ export class GameScene extends Phaser.Scene {
     this.updateGhost(p);
     if (!this.ghostValid) return;
     const def = this.buildMode;
-    this.scrap -= def.cost;
-    this.updateScrapText();
+    this.stock.scrap -= def.cost;
+    this.updateResourceText();
     this.buildings.push(new Building(this, this.grid, def, this.ghostCell));
     for (let r = 0; r < def.rows; r++) {
       for (let c = 0; c < def.cols; c++) {
@@ -890,15 +956,17 @@ export class GameScene extends Phaser.Scene {
 
   // --- Économie ---
 
-  private addNode(col: number, row: number, amount: number): void {
+  private addNode(type: ResourceType, col: number, row: number, amount: number): void {
+    const def = RESOURCES[type];
     const w = cellToWorld(this.grid, col, row);
     const sprite = this.add
-      .image(w.x, w.y, "scrap")
-      .setOrigin(0.499, SCRAP_OY)
-      .setScale(0.45)
-      .setDepth(w.y);
+      .image(w.x, w.y, def.assetKey)
+      .setOrigin(def.ox, def.oy)
+      .setScale(def.scale)
+      // tuile plate (mare) : posée au sol, sous les unités ; sinon depth iso normal
+      .setDepth(def.flat ? -90000 : w.y);
     this.nav.setBlocked(col, row);
-    this.nodes.push({ col, row, amount, sprite });
+    this.nodes.push({ type, col, row, amount, max: amount, baseScale: def.scale, sprite });
   }
 
   private nodeAt(cell: Cell, world: Phaser.Math.Vector2): ResourceNode | undefined {
@@ -1001,9 +1069,9 @@ export class GameScene extends Phaser.Scene {
 
         case "toDepot":
           if (u.isMoving) break;
-          this.scrap += job.carrying;
+          this.stock[job.node.type] += job.carrying;
           job.carrying = 0;
-          this.updateScrapText();
+          this.updateResourceText();
           if (job.node.amount > 0) {
             job.state = "toNode";
             this.gotoReserve(
@@ -1024,19 +1092,22 @@ export class GameScene extends Phaser.Scene {
       node.sprite.setVisible(false);
       this.nav.setBlocked(node.col, node.row, false);
     } else {
-      node.sprite.setScale(0.45 * (0.5 + (0.5 * node.amount) / NODE_AMOUNT));
+      node.sprite.setScale(node.baseScale * (0.5 + (0.5 * node.amount) / node.max));
     }
   }
 
-  private updateScrapText(): void {
-    this.scrapText.setText(`⛏ Ferraille : ${this.scrap}`);
+  private updateResourceText(): void {
+    const parts = RESOURCE_TYPES.map((t) => `${RESOURCES[t].icon} ${this.stock[t]}`);
+    this.resourceText.setText(parts.join("    "));
   }
 
   // --- Caméra & input ---
 
   private setupCamera(): void {
-    this.cameras.main.setZoom(0.9);
-    this.cameras.main.centerOn(0, 200);
+    this.cameras.main.setZoom(0.7);
+    // Démarre sur la base du joueur (haut-gauche de la map)
+    const c = cellToWorld(this.grid, 8, 8);
+    this.cameras.main.centerOn(c.x, c.y);
   }
 
   private panWithKeys(delta: number): void {
@@ -1302,7 +1373,7 @@ export class GameScene extends Phaser.Scene {
         [
           "Phase 1 — multi-unités, économie & combat",
           "Clic gauche : sélection (rectangle) · Maj+clic : ajouter/retirer de la sélection",
-          "Clic droit : déplacer / récolter (ferraille) / attaquer (ennemi rouge)",
+          "Clic droit : déplacer / récolter (ferraille ⛏ · carburant ⛽ · eau 💧) / attaquer (ennemi rouge)",
           "Groupes : Ctrl+[1-9] assigne · [1-9] rappelle (double-tap = recentrer)",
           "Construire : C (caserne) / B (tourelle) / N (mur) — clic gauche pose, Échap annule",
           "Caserne : la sélectionner (clic) puis T pour produire · clic droit = ralliement",
@@ -1319,17 +1390,17 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(1000000);
 
-    this.scrapText = this.add
+    this.resourceText = this.add
       .text(12, 92, "", {
         fontFamily: "monospace",
         fontSize: "18px",
-        color: "#e8c46a",
+        color: "#e8e0c0",
         backgroundColor: "#000000cc",
         padding: { x: 10, y: 6 },
       })
       .setScrollFactor(0)
       .setDepth(1000000);
-    this.updateScrapText();
+    this.updateResourceText();
 
     this.prodText = this.add
       .text(12, 132, "", {

@@ -726,9 +726,18 @@ Une bande-son hybride peut fonctionner :
 
 ## Phasage de développement
 
-### Phase 1 — Prototype moteur
+> **État d'avancement (au 2026-06-28)** — Le détail technique à jour vit dans
+> [CLAUDE.md](CLAUDE.md), section « État d'avancement ». Synthèse par phase :
+> Phase 1 ✅ complète · Phase 2 🟡 en cours (~60 %) · Phases 3→6 ⬜ non commencées.
+
+### Phase 1 — Prototype moteur ✅ (complète)
 
 Objectif : valider la faisabilité du cœur du jeu.
+
+Fait : carte iso calibrée, caméra pan/zoom (+ edge-scroll), unités sélectionnables
+et déplaçables (sélection simple/rectangle/additive, **groupes de contrôle**),
+obstacles, **pathfinding A\*** 8 directions, séparation/évitement entre unités,
+recalcul de chemin sur blocage, UI minimale.
 
 À produire :
 
@@ -739,20 +748,20 @@ Objectif : valider la faisabilité du cœur du jeu.
 - Début de pathfinding.
 - UI minimale.
 
-### Phase 2 — Vertical slice jouable
+### Phase 2 — Vertical slice jouable 🟡 (en cours, ~60 %)
 
 Objectif : obtenir une micro-version réellement fun.
 
 À produire :
 
-- Récolte d'au moins 2 ressources.
-- Construction de quelques bâtiments.
-- Production de 2 ou 3 unités.
-- Ennemi simple.
-- Boucle combat/défense.
-- Première carte lisible.
+- Récolte d'au moins 2 ressources. — 🟡 1 ressource (ferraille : gisements → dépôt). **2e ressource à faire.**
+- Construction de quelques bâtiments. — ✅ caserne, tourelle, mur (data-driven, mode placement).
+- Production de 2 ou 3 unités. — 🟡 production par caserne OK, mais 1 seul type d'unité. **Types distincts à faire.**
+- Ennemi simple. — ✅
+- Boucle combat/défense. — ✅ aggro, riposte, siège des bâtiments, tourelles défensives.
+- Première carte lisible. — ⬜ (encore la carte de calibrage).
 
-### Phase 3 — Base solo solide
+### Phase 3 — Base solo solide ⬜ (non commencée)
 
 Objectif : transformer le slice en vrai RTS solo.
 
@@ -765,7 +774,7 @@ Objectif : transformer le slice en vrai RTS solo.
 - HUD structuré.
 - Sauvegarde locale ou de session.
 
-### Phase 4 — Deuxième faction et asymétrie
+### Phase 4 — Deuxième faction et asymétrie ⬜ (non commencée)
 
 Objectif : commencer l'identité profonde du jeu.
 
@@ -776,7 +785,7 @@ Objectif : commencer l'identité profonde du jeu.
 - Équilibrage initial.
 - Nouvelles cartes.
 
-### Phase 5 — Multijoueur initial
+### Phase 5 — Multijoueur initial ⬜ (non commencée)
 
 Objectif : faire fonctionner des parties simples à plusieurs.
 
@@ -788,7 +797,7 @@ Objectif : faire fonctionner des parties simples à plusieurs.
 - 1v1 jouable.
 - Gestion de reconnexion minimale.
 
-### Phase 6 — Contenu, campagne, polish
+### Phase 6 — Contenu, campagne, polish ⬜ (non commencée)
 
 Objectif : passer d'un jeu fonctionnel à un vrai jeu complet.
 
@@ -862,16 +871,21 @@ Quand ce milestone existe, le reste devient un travail d'expansion, d'équilibra
 
 ## Prochaine étape logique
 
-La prochaine étape de travail n'est pas encore le code de production final, mais la formalisation complète du **Game Design Document**. Ce document devra détailler précisément :
+> **Note (2026-06-28)** : le projet a finalement choisi de **prototyper directement**
+> plutôt que d'écrire d'abord un GDD complet. Phase 1 validée, vertical slice (Phase 2)
+> en cours. La formalisation du GDD détaillé (ci-dessous) reste utile mais devient un
+> chantier *parallèle*, alimenté par ce qui se révèle fun à l'écran.
 
-- Le core loop.
-- Les factions.
-- Les ressources.
-- Les unités.
-- Les bâtiments.
-- Les tech trees.
-- Les modes de jeu.
-- Les règles réseau.
-- La roadmap de production.
+Pour **finir la Phase 2** (priorité immédiate) :
 
-Ce plan constitue donc la base stratégique du projet. La suite logique consistera à transformer cette vision en un document de conception ultra détaillé, puis en roadmap technique exécutable.
+- 2e ressource (ex. carburant ou eau) avec sa chaîne de récolte.
+- 2-3 types d'unités distincts par rôle (ex. récupérateur / fusilier / véhicule léger).
+- Une première vraie carte lisible (choke points, gisements contestables).
+- Premier vrai jet d'équilibrage du slice (coûts, temps, dégâts).
+
+En parallèle, formalisation du **Game Design Document** (core loop, factions, ressources,
+unités, bâtiments, tech trees, modes, règles réseau, roadmap), en s'appuyant sur le
+prototype existant plutôt que sur de la théorie.
+
+Ce plan reste la base stratégique du projet ; l'état d'avancement technique détaillé
+est tenu à jour dans [CLAUDE.md](CLAUDE.md).
