@@ -40,14 +40,16 @@ Alias d'import : `@/*` → `src/*`.
 ## État d'avancement
 
 - ✅ **Scaffolding** : Vite + TS + Phaser 4, structure de dossiers (build OK).
-- ✅ **Phase 1 — Prototype moteur** (en grande partie) :
+- ✅ **Phase 1 — Prototype moteur** (complète) :
   - Terrain isométrique peint (pack Golbanc) + grille logique iso **calibrée** (tile 270×156), dans `GameScene`.
-  - Caméra pan (glisser) / zoom (molette).
+  - Caméra : pan (glisser / flèches / edge-scroll) + zoom (molette).
   - Grille d'occupation (`world/Grid.ts`) : obstacles bloquent des cases.
   - **Pathfinding A\*** 8 directions (`world/pathfinding.ts`) : contournement d'obstacles.
-  - Unité (`entities/Unit.ts`) : sélection clic gauche, ordre clic droit, suit le chemin, **sprite animé 8 directions** (idle/run).
-  - Depth-sorting iso (props + unité).
-- ⬜ **Reste Phase 1 / suite** : sélection multiple + ordres de groupe, collisions entre unités, recalcul de chemin dynamique, économie de base.
+  - Unité (`entities/Unit.ts`) : suit le chemin, **sprite animé 8 directions** (idle/run/attack/die), depth-sorting iso.
+  - **Sélection** : clic simple, rectangle, **Maj+clic additif**, **groupes de contrôle Ctrl+[1-9] / rappel [1-9]** (double-tap = recentrer).
+  - **Ordres de groupe** : déplacement en formation (`freeCellsAround`), **évitement/séparation** entre unités, **recalcul de chemin** sur blocage (`resolveStuck`).
+- 🟡 **Phase 2 — Vertical slice (entamée)** : récolte de ferraille (gisements → dépôt), production d'unités (file + coût), ennemi simple + boucle de combat (aggro, riposte, barres de vie, mort).
+- ⬜ **Reste Phase 2** : 2e ressource, construction de bâtiments, 2-3 types d'unités distincts, première carte lisible.
 
 ### Assets (état)
 - **Terrain/décor** : pack "Golbanc Homestead" (Starlight Furnace), iso. Cartes faites main (pas de procédural).

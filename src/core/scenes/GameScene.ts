@@ -581,6 +581,9 @@ export class GameScene extends Phaser.Scene {
 
   private onUnitDead(u: Unit): void {
     this.selected = this.selected.filter((x) => x !== u);
+    for (const [n, g] of this.groups) {
+      if (g.includes(u)) this.groups.set(n, g.filter((x) => x !== u));
+    }
     this.clearJob(u);
     for (const o of this.units) if (o.attackTarget === u) o.attackTarget = null;
     this.time.delayedCall(DEATH_REMOVE_MS, () => {
@@ -854,22 +857,40 @@ export class GameScene extends Phaser.Scene {
         this.prodQueue++;
       }
     });
+
+    // Groupes de contrôle : Ctrl+[1-9] assigne, [1-9] rappelle (double-tap = centrer).
+    // addCapture empêche le navigateur d'intercepter Ctrl+chiffre (changement d'onglet).
+    this.input.keyboard?.addCapture("ONE,TWO,THREE,FOUR,FIVE,SIX,SEVEN,EIGHT,NINE");
+    this.input.keyboard?.on("keydown", (e: KeyboardEvent) => {
+      const n = Number(e.key);
+      if (!Number.isInteger(n) || n < 1 || n > 9) return;
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) this.assignGroup(n);
+      else this.recallGroup(n);
+    });
   }
 
-  private selectSingle(p: Phaser.Input.Pointer): void {
+  private selectSingle(p: Phaser.Input.Pointer, additive: boolean): void {
     const w = this.cameras.main.getWorldPoint(p.x, p.y);
     const u = this.units.find(
       (unit) => unit.team === "player" && !unit.dead && unit.hitTest(w.x, w.y),
     );
-    this.selected = u ? [u] : [];
+    if (!additive) {
+      this.selected = u ? [u] : [];
+      return;
+    }
+    if (!u) return;
+    const i = this.selected.indexOf(u); // shift-clic : bascule l'unité
+    if (i >= 0) this.selected.splice(i, 1);
+    else this.selected.push(u);
   }
 
-  private selectInBox(): void {
+  private selectInBox(additive: boolean): void {
     const x1 = Math.min(this.selStart.x, this.selCur.x);
     const x2 = Math.max(this.selStart.x, this.selCur.x);
     const y1 = Math.min(this.selStart.y, this.selCur.y);
     const y2 = Math.max(this.selStart.y, this.selCur.y);
-    this.selected = this.units.filter(
+    const inBox = this.units.filter(
       (u) =>
         u.team === "player" &&
         !u.dead &&
@@ -878,6 +899,40 @@ export class GameScene extends Phaser.Scene {
         u.body.y >= y1 &&
         u.body.y <= y2,
     );
+    if (!additive) {
+      this.selected = inBox;
+      return;
+    }
+    for (const u of inBox) if (!this.selected.includes(u)) this.selected.push(u);
+  }
+
+  // --- Groupes de contrôle ---
+
+  private assignGroup(n: number): void {
+    this.groups.set(n, this.selected.slice());
+  }
+
+  private recallGroup(n: number): void {
+    const g = (this.groups.get(n) ?? []).filter((u) => !u.dead);
+    this.groups.set(n, g);
+    if (g.length === 0) return;
+    this.selected = g.slice();
+    const now = this.time.now;
+    if (this.lastGroupKey === n && now - this.lastGroupTime < 320) {
+      this.centerOnUnits(g); // double-tap : recentre la caméra sur le groupe
+    }
+    this.lastGroupKey = n;
+    this.lastGroupTime = now;
+  }
+
+  private centerOnUnits(us: Unit[]): void {
+    let sx = 0;
+    let sy = 0;
+    for (const u of us) {
+      sx += u.body.x;
+      sy += u.body.y;
+    }
+    this.cameras.main.centerOn(sx / us.length, sy / us.length);
   }
 
   private commandMove(p: Phaser.Input.Pointer): void {
@@ -923,8 +978,9 @@ export class GameScene extends Phaser.Scene {
         12,
         [
           "Phase 1 — multi-unités, économie & combat",
-          "Clic gauche : sélection · Clic droit : déplacer / récolter (ferraille) / attaquer (ennemi rouge)",
-          "Les ennemis attaquent si tu t'approches. Barres de vie au-dessus des unités.",
+          "Clic gauche : sélection (rectangle) · Maj+clic : ajouter/retirer de la sélection",
+          "Clic droit : déplacer / récolter (ferraille) / attaquer (ennemi rouge)",
+          "Groupes : Ctrl+[1-9] assigne · [1-9] rappelle (double-tap = recentrer)",
           "Caméra : bords de l'écran, flèches, ou clic-molette · Molette : zoom · G : grille",
         ],
         {
