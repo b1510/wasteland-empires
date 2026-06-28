@@ -19,6 +19,11 @@ export class Building {
   dead = false;
   /** Compte à rebours de tir (tourelles), piloté par la scène. */
   cooldown = 0;
+  /** File de production et progression (bâtiments producteurs), pilotées par la scène. */
+  queue = 0;
+  prodTimer = 0;
+  /** Point de ralliement des unités produites. */
+  rally: Cell | null = null;
 
   constructor(scene: Phaser.Scene, grid: IsoGrid, def: BuildingDef, cell: Cell) {
     this.def = def;
@@ -33,6 +38,7 @@ export class Building {
       .setOrigin(def.ox, def.oy)
       .setScale(def.scale)
       .setDepth(w.y);
+    if (def.tint !== undefined) this.sprite.setTint(def.tint);
   }
 
   get x(): number {

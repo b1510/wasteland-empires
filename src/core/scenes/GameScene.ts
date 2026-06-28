@@ -35,10 +35,6 @@ const NODE_AMOUNT = 120; // ferraille par gisement
 const CARRY_CAPACITY = 15; // ferraille transportée par voyage
 const GATHER_TIME = 1200; // ms pour miner une charge
 
-// Production
-const UNIT_COST = 20; // ferraille par unité
-const BUILD_TIME = 3000; // ms de production
-
 // Combat
 const ATTACK_RANGE = 105; // px
 const ATTACK_DAMAGE = 12;
@@ -120,13 +116,12 @@ export class GameScene extends Phaser.Scene {
   private scrapText!: Phaser.GameObjects.Text;
   private readonly depotAnchor: Cell = { col: 7, row: 6 }; // case du bâtiment (HQ)
 
-  // Production
-  private prodQueue = 0;
-  private prodTimer = 0;
+  // Production (file portée par chaque caserne ; ce texte reflète la sélection)
   private prodText!: Phaser.GameObjects.Text;
 
   // Construction
   private buildings: Building[] = [];
+  private selectedBuilding: Building | null = null;
   private buildMode: BuildingDef | null = null;
   private ghost: Phaser.GameObjects.Image | null = null;
   private ghostCell: Cell = { col: 0, row: 0 };
@@ -365,6 +360,34 @@ export class GameScene extends Phaser.Scene {
     for (const u of this.selected) {
       this.selectionGfx.strokeEllipse(u.body.x, u.body.y, 44, 26);
     }
+    this.drawBuildingSelection();
+  }
+
+  /** Contour iso du footprint du bâtiment sélectionné (+ marqueur de ralliement). */
+  private drawBuildingSelection(): void {
+    const b = this.selectedBuilding;
+    if (!b || b.dead) return;
+    const c0 = b.cell.col;
+    const r0 = b.cell.row;
+    const c1 = c0 + b.def.cols - 1;
+    const r1 = r0 + b.def.rows - 1;
+    const top = cellCorners(this.grid, c0, r0)[0];
+    const right = cellCorners(this.grid, c1, r0)[1];
+    const bottom = cellCorners(this.grid, c1, r1)[2];
+    const left = cellCorners(this.grid, c0, r1)[3];
+    this.selectionGfx.lineStyle(2, 0x9fd0ff, 0.95);
+    this.selectionGfx.beginPath();
+    this.selectionGfx.moveTo(top.x, top.y);
+    this.selectionGfx.lineTo(right.x, right.y);
+    this.selectionGfx.lineTo(bottom.x, bottom.y);
+    this.selectionGfx.lineTo(left.x, left.y);
+    this.selectionGfx.closePath();
+    this.selectionGfx.strokePath();
+    if (b.rally) {
+      const w = cellToWorld(this.grid, b.rally.col, b.rally.row);
+      this.selectionGfx.lineStyle(2, 0x9fd0ff, 0.8);
+      this.selectionGfx.strokeEllipse(w.x, w.y, 22, 12);
+    }
   }
 
   private drawSelBox(): void {
@@ -499,30 +522,55 @@ export class GameScene extends Phaser.Scene {
   // --- Production ---
 
   private processProduction(delta: number): void {
-    if (this.prodQueue > 0) {
-      this.prodTimer += delta;
-      if (this.prodTimer >= BUILD_TIME) {
-        this.prodTimer = 0;
-        this.prodQueue--;
-        this.spawnPlayerUnit();
+    for (const b of this.buildings) {
+      const spec = b.def.produces;
+      if (b.dead || !spec || b.queue <= 0) continue;
+      b.prodTimer += delta;
+      if (b.prodTimer >= spec.buildTime) {
+        b.prodTimer = 0;
+        b.queue--;
+        this.spawnFromBuilding(b);
       }
-    } else {
-      this.prodTimer = 0;
     }
     this.updateProdText();
   }
 
-  private spawnPlayerUnit(): void {
-    const spot =
-      this.adjacentFreeCell(this.depotAnchor.col, this.depotAnchor.row, this.depotAnchor, null) ??
-      { col: this.depotAnchor.col + 1, row: this.depotAnchor.row + 1 };
-    this.units.push(new Unit(this, this.grid, spot, "surv", "player"));
+  /** Met une unité en file sur la caserne sélectionnée (débite la ferraille). */
+  private queueProduction(): void {
+    const b = this.selectedBuilding;
+    if (!b || b.dead || !b.def.produces) return;
+    const spec = b.def.produces;
+    if (this.scrap < spec.cost) return;
+    this.scrap -= spec.cost;
+    this.updateScrapText();
+    b.queue++;
+    this.updateProdText();
+  }
+
+  private spawnFromBuilding(b: Building): void {
+    const spec = b.def.produces!;
+    const exit: Cell = { col: b.cell.col, row: b.cell.row + b.def.rows };
+    const spot = this.freeCellsAround(exit, 1)[0] ?? exit;
+    const u = new Unit(this, this.grid, spot, spec.unitAnim, "player");
+    this.units.push(u);
+    if (b.rally) {
+      const path = findPath(this.nav, u.cell, b.rally);
+      if (path) u.setPath(path);
+    }
   }
 
   private updateProdText(): void {
-    const pct = this.prodQueue > 0 ? Math.floor((this.prodTimer / BUILD_TIME) * 100) : 0;
-    const status = this.prodQueue > 0 ? `${this.prodQueue} en file — ${pct}%` : "—";
-    this.prodText.setText(`🏭 Production : ${status}   (T = produire, ${UNIT_COST} ferraille)`);
+    const b = this.selectedBuilding;
+    if (b && !b.dead && b.def.produces) {
+      const spec = b.def.produces;
+      const pct = b.queue > 0 ? Math.floor((b.prodTimer / spec.buildTime) * 100) : 0;
+      const status = b.queue > 0 ? `${b.queue} en file — ${pct}%` : "—";
+      this.prodText.setText(
+        `🏭 ${b.def.name} : ${status}   (T = produire ${spec.cost} ferraille · clic droit = ralliement)`,
+      );
+    } else {
+      this.prodText.setText("🏭 Production : sélectionne une caserne (clic) puis T");
+    }
   }
 
   // --- Combat ---
@@ -724,6 +772,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.drawBlocked();
     for (const [u, tgt] of this.siegeTargets) if (tgt === b) this.siegeTargets.delete(u);
+    if (this.selectedBuilding === b) this.setSelectedBuilding(null);
     this.buildings = this.buildings.filter((x) => x !== b);
     b.sprite.destroy();
   }
@@ -1086,14 +1135,8 @@ export class GameScene extends Phaser.Scene {
       this.drawGrid();
     });
 
-    // Produire une unité (dépense de la ferraille)
-    this.input.keyboard?.on("keydown-T", () => {
-      if (this.scrap >= UNIT_COST) {
-        this.scrap -= UNIT_COST;
-        this.updateScrapText();
-        this.prodQueue++;
-      }
-    });
+    // Produire une unité depuis la caserne sélectionnée
+    this.input.keyboard?.on("keydown-T", () => this.queueProduction());
 
     // Construction : raccourcis du catalogue (B tourelle, N mur…) + Échap pour annuler
     for (const b of BUILDINGS) {
@@ -1118,14 +1161,41 @@ export class GameScene extends Phaser.Scene {
     const u = this.units.find(
       (unit) => unit.team === "player" && !unit.dead && unit.hitTest(w.x, w.y),
     );
-    if (!additive) {
-      this.selected = u ? [u] : [];
+    if (additive) {
+      if (!u) return;
+      const i = this.selected.indexOf(u); // shift-clic : bascule l'unité
+      if (i >= 0) this.selected.splice(i, 1);
+      else this.selected.push(u);
       return;
     }
-    if (!u) return;
-    const i = this.selected.indexOf(u); // shift-clic : bascule l'unité
-    if (i >= 0) this.selected.splice(i, 1);
-    else this.selected.push(u);
+    if (u) {
+      this.selected = [u];
+      this.setSelectedBuilding(null);
+      return;
+    }
+    // pas d'unité sous le curseur : tente la sélection d'un bâtiment
+    const b = this.buildingAt(w.x, w.y);
+    this.selected = [];
+    this.setSelectedBuilding(b);
+  }
+
+  private buildingAt(x: number, y: number): Building | null {
+    const cell = worldToCell(this.grid, x, y);
+    for (const b of this.buildings) {
+      if (b.dead) continue;
+      const inFootprint =
+        cell.col >= b.cell.col &&
+        cell.col < b.cell.col + b.def.cols &&
+        cell.row >= b.cell.row &&
+        cell.row < b.cell.row + b.def.rows;
+      if (inFootprint || b.sprite.getBounds().contains(x, y)) return b;
+    }
+    return null;
+  }
+
+  private setSelectedBuilding(b: Building | null): void {
+    this.selectedBuilding = b;
+    this.updateProdText();
   }
 
   private selectInBox(additive: boolean): void {
@@ -1144,6 +1214,7 @@ export class GameScene extends Phaser.Scene {
     );
     if (!additive) {
       this.selected = inBox;
+      this.setSelectedBuilding(null);
       return;
     }
     for (const u of inBox) if (!this.selected.includes(u)) this.selected.push(u);
@@ -1160,6 +1231,7 @@ export class GameScene extends Phaser.Scene {
     this.groups.set(n, g);
     if (g.length === 0) return;
     this.selected = g.slice();
+    this.setSelectedBuilding(null);
     const now = this.time.now;
     if (this.lastGroupKey === n && now - this.lastGroupTime < 320) {
       this.centerOnUnits(g); // double-tap : recentre la caméra sur le groupe
@@ -1179,9 +1251,17 @@ export class GameScene extends Phaser.Scene {
   }
 
   private commandMove(p: Phaser.Input.Pointer): void {
-    if (this.selected.length === 0) return;
     const w = this.cameras.main.getWorldPoint(p.x, p.y);
     const goal = worldToCell(this.grid, w.x, w.y);
+
+    // Aucune unité sélectionnée : clic droit = point de ralliement de la caserne
+    if (this.selected.length === 0) {
+      const b = this.selectedBuilding;
+      if (b && !b.dead && b.def.produces && this.nav.isWalkable(goal.col, goal.row)) {
+        b.rally = goal;
+      }
+      return;
+    }
 
     // Clic sur un ennemi -> ordre d'attaque
     const foe = this.units.find(
@@ -1224,7 +1304,8 @@ export class GameScene extends Phaser.Scene {
           "Clic gauche : sélection (rectangle) · Maj+clic : ajouter/retirer de la sélection",
           "Clic droit : déplacer / récolter (ferraille) / attaquer (ennemi rouge)",
           "Groupes : Ctrl+[1-9] assigne · [1-9] rappelle (double-tap = recentrer)",
-          "Construire : B (tourelle) / N (mur) — clic gauche pose, Échap annule",
+          "Construire : C (caserne) / B (tourelle) / N (mur) — clic gauche pose, Échap annule",
+          "Caserne : la sélectionner (clic) puis T pour produire · clic droit = ralliement",
           "Caméra : bords de l'écran, flèches, ou clic-molette · Molette : zoom · G : grille",
         ],
         {
