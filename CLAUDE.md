@@ -48,8 +48,11 @@ Alias d'import : `@/*` → `src/*`.
   - Unité (`entities/Unit.ts`) : suit le chemin, **sprite animé 8 directions** (idle/run/attack/die), depth-sorting iso.
   - **Sélection** : clic simple, rectangle, **Maj+clic additif**, **groupes de contrôle Ctrl+[1-9] / rappel [1-9]** (double-tap = recentrer).
   - **Ordres de groupe** : déplacement en formation (`freeCellsAround`), **évitement/séparation** entre unités, **recalcul de chemin** sur blocage (`resolveStuck`).
-- 🟡 **Phase 2 — Vertical slice (entamée)** : récolte de ferraille (gisements → dépôt), production d'unités (file + coût), ennemi simple + boucle de combat (aggro, riposte, barres de vie, mort).
-- ⬜ **Reste Phase 2** : 2e ressource, construction de bâtiments, 2-3 types d'unités distincts, première carte lisible.
+- 🟡 **Phase 2 — Vertical slice (en cours)** :
+  - Récolte de ferraille (gisements → dépôt), production d'unités (file + coût).
+  - Ennemi simple + boucle de combat (aggro, riposte, barres de vie, mort).
+  - **Construction de bâtiments** data-driven (`content/buildings.ts`, `entities/Building.ts`) : mode placement (ghost + validation footprint + coût), footprint bloqué sur la grille de nav. Tourelle défensive (tir hitscan + FX) et mur. Ennemis assiègent les bâtiments (boucle attaque/défense fermée).
+- ⬜ **Reste Phase 2** : 2e ressource, 2-3 types d'unités distincts, bâtiment de production (la prod sort encore du « néant »), première carte lisible.
 
 ### Assets (état)
 - **Terrain/décor** : pack "Golbanc Homestead" (Starlight Furnace), iso. Cartes faites main (pas de procédural).

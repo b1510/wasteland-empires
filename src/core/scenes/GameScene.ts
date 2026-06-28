@@ -10,6 +10,8 @@ import {
 import { Grid } from "@/world/Grid";
 import { findPath } from "@/world/pathfinding";
 import { Unit } from "@/entities/Unit";
+import { Building } from "@/entities/Building";
+import { BUILDINGS, buildingByHotkey, type BuildingDef } from "@/content/buildings";
 
 /**
  * Phase 1 — prototype moteur.
@@ -122,6 +124,19 @@ export class GameScene extends Phaser.Scene {
   private prodQueue = 0;
   private prodTimer = 0;
   private prodText!: Phaser.GameObjects.Text;
+
+  // Construction
+  private buildings: Building[] = [];
+  private buildMode: BuildingDef | null = null;
+  private ghost: Phaser.GameObjects.Image | null = null;
+  private ghostCell: Cell = { col: 0, row: 0 };
+  private ghostValid = false;
+  private buildText!: Phaser.GameObjects.Text;
+  private siegeTargets = new Map<Unit, Building>(); // ennemi -> bâtiment assiégé
+
+  // FX de tir (tourelles) : segments éphémères
+  private fxGfx!: Phaser.GameObjects.Graphics;
+  private shots: { x1: number; y1: number; x2: number; y2: number; ttl: number }[] = [];
 
   // sélection (clic gauche)
   private selecting = false;
@@ -243,6 +258,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.hpGfx = this.add.graphics().setDepth(90000);
+    this.fxGfx = this.add.graphics().setDepth(85000);
 
     // Gisements de ferraille
     this.addNode(13, 6, NODE_AMOUNT);
@@ -258,6 +274,8 @@ export class GameScene extends Phaser.Scene {
     this.panWithKeys(delta);
     this.edgeScroll(delta);
     this.processCombat(delta);
+    this.processEnemySiege(delta);
+    this.processTurrets(delta);
     this.processProduction(delta);
     const sep = this.computeSeparation();
     for (let i = 0; i < this.units.length; i++) {
@@ -268,6 +286,7 @@ export class GameScene extends Phaser.Scene {
     this.drawPaths();
     this.drawSelection();
     this.drawHpBars();
+    this.drawTurretFx(delta);
   }
 
   // --- Rendu ---
@@ -579,8 +598,13 @@ export class GameScene extends Phaser.Scene {
     if (died) this.onUnitDead(target);
   }
 
+  private damageUnit(target: Unit, amount: number): void {
+    if (target.takeDamage(amount)) this.onUnitDead(target);
+  }
+
   private onUnitDead(u: Unit): void {
     this.selected = this.selected.filter((x) => x !== u);
+    this.siegeTargets.delete(u);
     for (const [n, g] of this.groups) {
       if (g.includes(u)) this.groups.set(n, g.filter((x) => x !== u));
     }
@@ -606,6 +630,213 @@ export class GameScene extends Phaser.Scene {
       this.hpGfx.fillStyle(u.team === "enemy" ? 0xff5555 : 0x55dd55, 1);
       this.hpGfx.fillRect(x, y, w * ratio, h);
     }
+    // Bâtiments : barre affichée seulement s'ils sont endommagés
+    for (const b of this.buildings) {
+      if (b.dead || b.hp >= b.maxHp) continue;
+      const w = 48;
+      const h = 6;
+      const top = b.sprite.getTopCenter();
+      const x = top.x - w / 2;
+      const y = top.y - 8;
+      const ratio = Phaser.Math.Clamp(b.hp / b.maxHp, 0, 1);
+      this.hpGfx.fillStyle(0x000000, 0.6);
+      this.hpGfx.fillRect(x - 1, y - 1, w + 2, h + 2);
+      this.hpGfx.fillStyle(0x66ccff, 1);
+      this.hpGfx.fillRect(x, y, w * ratio, h);
+    }
+  }
+
+  // --- Construction & défense ---
+
+  private toggleBuild(hotkey: string): void {
+    const def = buildingByHotkey(hotkey);
+    if (!def) return;
+    if (this.buildMode?.id === def.id) this.cancelBuild();
+    else this.enterBuildMode(def);
+  }
+
+  private enterBuildMode(def: BuildingDef): void {
+    this.buildMode = def;
+    this.ghost?.destroy();
+    this.ghost = this.add
+      .image(0, 0, def.assetKey)
+      .setOrigin(def.ox, def.oy)
+      .setScale(def.scale)
+      .setAlpha(0.55)
+      .setDepth(95000);
+    this.updateBuildText();
+  }
+
+  private cancelBuild(): void {
+    this.buildMode = null;
+    this.ghost?.destroy();
+    this.ghost = null;
+    this.updateBuildText();
+  }
+
+  private canPlace(def: BuildingDef, anchor: Cell): boolean {
+    for (let r = 0; r < def.rows; r++) {
+      for (let c = 0; c < def.cols; c++) {
+        const col = anchor.col + c;
+        const row = anchor.row + r;
+        if (!this.nav.isWalkable(col, row) || this.isOccupied(col, row)) return false;
+      }
+    }
+    return true;
+  }
+
+  private updateGhost(p: Phaser.Input.Pointer): void {
+    if (!this.buildMode || !this.ghost) return;
+    const def = this.buildMode;
+    const w = this.cameras.main.getWorldPoint(p.x, p.y);
+    const anchor = worldToCell(this.grid, w.x, w.y);
+    const fc = anchor.col + (def.cols - 1) / 2;
+    const fr = anchor.row + (def.rows - 1) / 2;
+    const cw = cellToWorld(this.grid, fc, fr);
+    this.ghost.setPosition(cw.x, cw.y).setDepth(95000);
+    this.ghostCell = anchor;
+    this.ghostValid = this.canPlace(def, anchor) && this.scrap >= def.cost;
+    this.ghost.setTint(this.ghostValid ? 0x66ff88 : 0xff5566);
+  }
+
+  private tryPlace(p: Phaser.Input.Pointer): void {
+    if (!this.buildMode) return;
+    this.updateGhost(p);
+    if (!this.ghostValid) return;
+    const def = this.buildMode;
+    this.scrap -= def.cost;
+    this.updateScrapText();
+    this.buildings.push(new Building(this, this.grid, def, this.ghostCell));
+    for (let r = 0; r < def.rows; r++) {
+      for (let c = 0; c < def.cols; c++) {
+        this.nav.setBlocked(this.ghostCell.col + c, this.ghostCell.row + r, true);
+      }
+    }
+    this.drawBlocked();
+    this.updateGhost(p); // reste en mode construction (Échap / clic droit pour sortir)
+  }
+
+  private onBuildingDead(b: Building): void {
+    for (let r = 0; r < b.def.rows; r++) {
+      for (let c = 0; c < b.def.cols; c++) {
+        this.nav.setBlocked(b.cell.col + c, b.cell.row + r, false);
+      }
+    }
+    this.drawBlocked();
+    for (const [u, tgt] of this.siegeTargets) if (tgt === b) this.siegeTargets.delete(u);
+    this.buildings = this.buildings.filter((x) => x !== b);
+    b.sprite.destroy();
+  }
+
+  private nearestEnemyTo(x: number, y: number, range: number): Unit | null {
+    let best: Unit | null = null;
+    let bestD = range * range;
+    for (const o of this.units) {
+      if (o.dead || o.team !== "enemy") continue;
+      const d = (o.body.x - x) ** 2 + (o.body.y - y) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = o;
+      }
+    }
+    return best;
+  }
+
+  private nearestPlayerBuilding(x: number, y: number, range: number): Building | null {
+    let best: Building | null = null;
+    let bestD = range * range;
+    for (const b of this.buildings) {
+      if (b.dead) continue;
+      const d = (b.x - x) ** 2 + (b.y - y) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = b;
+      }
+    }
+    return best;
+  }
+
+  /** Tourelles : acquièrent l'ennemi le plus proche à portée et tirent (hitscan). */
+  private processTurrets(delta: number): void {
+    for (const b of this.buildings) {
+      if (b.dead || !b.def.turret) continue;
+      const spec = b.def.turret;
+      b.cooldown -= delta;
+      if (b.cooldown > 0) continue;
+      const foe = this.nearestEnemyTo(b.x, b.y, spec.range);
+      if (!foe) continue;
+      b.cooldown = spec.cooldown;
+      this.shots.push({ x1: b.x, y1: b.y - 46, x2: foe.body.x, y2: foe.body.y - 34, ttl: 90 });
+      this.damageUnit(foe, spec.damage);
+    }
+  }
+
+  /**
+   * Siège : un ennemi sans cible-unité s'en prend au bâtiment joueur le plus
+   * proche (s'approche puis frappe). C'est ce qui ferme la boucle attaque/défense.
+   */
+  private processEnemySiege(delta: number): void {
+    for (const u of this.units) {
+      if (u.dead || u.team !== "enemy") continue;
+      if (u.attackTarget && !u.attackTarget.dead) {
+        this.siegeTargets.delete(u);
+        continue;
+      }
+      let b = this.siegeTargets.get(u);
+      if (!b || b.dead) {
+        b = this.nearestPlayerBuilding(u.body.x, u.body.y, AGGRO_RANGE) ?? undefined;
+        if (b) this.siegeTargets.set(u, b);
+        else {
+          this.siegeTargets.delete(u);
+          continue;
+        }
+      }
+      const dx = b.x - u.body.x;
+      const dy = b.y - u.body.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist <= ATTACK_RANGE + 36) {
+        if (u.isMoving) u.stop();
+        u.faceTo(dx, dy);
+        u.attacking = true;
+        u.combatTimer -= delta;
+        if (u.combatTimer <= 0) {
+          u.combatTimer = ATTACK_CD;
+          if (b.takeDamage(ATTACK_DAMAGE)) this.onBuildingDead(b);
+        }
+      } else {
+        u.attacking = false;
+        const tcell = worldToCell(this.grid, b.x, b.y);
+        const key = this.cellKey(tcell.col, tcell.row);
+        if (key !== u.chaseKey || !u.isMoving) {
+          u.chaseKey = key;
+          const approach = this.adjacentFreeCell(b.cell.col, b.cell.row, u.cell, null) ?? tcell;
+          const path = findPath(this.nav, u.cell, approach);
+          if (path) u.setPath(path);
+        }
+      }
+    }
+  }
+
+  private drawTurretFx(delta: number): void {
+    this.fxGfx.clear();
+    for (let i = this.shots.length - 1; i >= 0; i--) {
+      const s = this.shots[i];
+      s.ttl -= delta;
+      if (s.ttl <= 0) {
+        this.shots.splice(i, 1);
+        continue;
+      }
+      this.fxGfx.lineStyle(2, 0xfff36b, Phaser.Math.Clamp(s.ttl / 90, 0, 1));
+      this.fxGfx.lineBetween(s.x1, s.y1, s.x2, s.y2);
+    }
+  }
+
+  private updateBuildText(): void {
+    const list = BUILDINGS.map((b) => `${b.hotkey}:${b.name}(${b.cost})`).join("  ");
+    const cur = this.buildMode
+      ? ` — ${this.buildMode.name} : clic gauche pose · clic droit/Échap annule`
+      : "";
+    this.buildText.setText(`🏗 Construire — ${list}${cur}`);
   }
 
   // --- Économie ---
@@ -789,6 +1020,11 @@ export class GameScene extends Phaser.Scene {
     this.input.mouse?.disableContextMenu();
 
     this.input.on(Phaser.Input.Events.POINTER_DOWN, (p: Phaser.Input.Pointer) => {
+      if (this.buildMode) {
+        if (p.leftButtonDown()) this.tryPlace(p);
+        else if (p.rightButtonDown()) this.cancelBuild();
+        return;
+      }
       if (p.middleButtonDown()) {
         this.panning = true;
         this.panStart = { x: p.x, y: p.y };
@@ -822,6 +1058,7 @@ export class GameScene extends Phaser.Scene {
       const w = cam.getWorldPoint(p.x, p.y);
       const cell = worldToCell(this.grid, w.x, w.y);
       this.drawHover(cell.col, cell.row);
+      if (this.buildMode) this.updateGhost(p);
     });
 
     this.input.on(Phaser.Input.Events.POINTER_UP, (p: Phaser.Input.Pointer) => {
@@ -857,6 +1094,12 @@ export class GameScene extends Phaser.Scene {
         this.prodQueue++;
       }
     });
+
+    // Construction : raccourcis du catalogue (B tourelle, N mur…) + Échap pour annuler
+    for (const b of BUILDINGS) {
+      this.input.keyboard?.on(`keydown-${b.hotkey}`, () => this.toggleBuild(b.hotkey));
+    }
+    this.input.keyboard?.on("keydown-ESC", () => this.cancelBuild());
 
     // Groupes de contrôle : Ctrl+[1-9] assigne, [1-9] rappelle (double-tap = centrer).
     // addCapture empêche le navigateur d'intercepter Ctrl+chiffre (changement d'onglet).
@@ -981,6 +1224,7 @@ export class GameScene extends Phaser.Scene {
           "Clic gauche : sélection (rectangle) · Maj+clic : ajouter/retirer de la sélection",
           "Clic droit : déplacer / récolter (ferraille) / attaquer (ennemi rouge)",
           "Groupes : Ctrl+[1-9] assigne · [1-9] rappelle (double-tap = recentrer)",
+          "Construire : B (tourelle) / N (mur) — clic gauche pose, Échap annule",
           "Caméra : bords de l'écran, flèches, ou clic-molette · Molette : zoom · G : grille",
         ],
         {
@@ -1017,5 +1261,17 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(1000000);
     this.updateProdText();
+
+    this.buildText = this.add
+      .text(12, 168, "", {
+        fontFamily: "monospace",
+        fontSize: "15px",
+        color: "#d7b0ff",
+        backgroundColor: "#000000cc",
+        padding: { x: 10, y: 6 },
+      })
+      .setScrollFactor(0)
+      .setDepth(1000000);
+    this.updateBuildText();
   }
 }
