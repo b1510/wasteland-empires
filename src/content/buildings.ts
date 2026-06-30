@@ -38,6 +38,8 @@ export interface BuildingDef {
   turret?: TurretSpec;
   /** Ids d'unités (cf. content/units.ts) que ce bâtiment peut produire. */
   produces?: string[];
+  /** Quartier général : objectif de victoire/défaite, posé d'office (pas constructible). */
+  isHQ?: boolean;
 }
 
 export const BUILDINGS: BuildingDef[] = [
@@ -89,3 +91,42 @@ export const BUILDINGS: BuildingDef[] = [
 export function buildingByHotkey(key: string): BuildingDef | undefined {
   return BUILDINGS.find((b) => b.hotkey === key);
 }
+
+/**
+ * Quartiers généraux — posés d'office au démarrage (pas dans le menu de construction).
+ * Détruire le QG ennemi = victoire ; perdre le sien = défaite. Le QG joueur sert aussi
+ * de dépôt et peut produire un récupérateur (relance d'économie si la caserne tombe).
+ */
+export const PLAYER_HQ: BuildingDef = {
+  id: "hq-player",
+  name: "QG",
+  assetKey: "building-a",
+  cols: 2,
+  rows: 2,
+  scale: 0.5,
+  ox: 0.506,
+  oy: 0.646,
+  cost: 0,
+  hp: 900,
+  hotkey: "",
+  tint: 0x9fd0ff,
+  isHQ: true,
+  produces: ["scout"],
+};
+
+export const ENEMY_HQ: BuildingDef = {
+  id: "hq-enemy",
+  name: "QG ennemi",
+  assetKey: "building-b",
+  cols: 2,
+  rows: 2,
+  scale: 0.5,
+  ox: 0.506,
+  oy: 0.646,
+  cost: 0,
+  hp: 1100,
+  hotkey: "",
+  tint: 0xff8a7a,
+  isHQ: true,
+  produces: ["scout", "rifle", "heavy"],
+};

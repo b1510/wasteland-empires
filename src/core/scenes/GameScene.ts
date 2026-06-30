@@ -9,11 +9,18 @@ import {
 } from "@/world/iso";
 import { Grid } from "@/world/Grid";
 import { findPath } from "@/world/pathfinding";
-import { Unit } from "@/entities/Unit";
+import { Unit, type Team } from "@/entities/Unit";
 import { Building } from "@/entities/Building";
-import { BUILDINGS, buildingByHotkey, type BuildingDef } from "@/content/buildings";
+import {
+  BUILDINGS,
+  buildingByHotkey,
+  PLAYER_HQ,
+  ENEMY_HQ,
+  type BuildingDef,
+} from "@/content/buildings";
 import { RESOURCES, RESOURCE_TYPES, type ResourceType } from "@/content/resources";
 import { UNITS, isRanged } from "@/content/units";
+import { ENEMY_AI } from "@/content/ai";
 
 /**
  * Phase 1 — prototype moteur.
@@ -53,31 +60,46 @@ interface PropDef {
 }
 
 // oy calibré visuellement (= bas de bbox - 0.33) pour poser la base sur la case.
-// NB : ox/oy des nouveaux décors (crate, building-b, tree-a) sont approximés et
-// pourront être affinés visuellement (cf. PocScene).
+// NB : ox/oy des nouveaux décors (crate, tree-a) sont approximés et pourront être
+// affinés visuellement (cf. PocScene).
 const TREE_PROP = { scale: 0.4, fw: 1, fh: 1, ox: 0.488, oy: 0.623 };
 const ROCK_PROP = { scale: 0.4, fw: 1, fh: 1, ox: 0.495, oy: 0.625 };
+
+/**
+ * Barrière centrale = vrai CHOKE POINT. Mur en anti-diagonale (col+row = 39),
+ * étanche grâce au « no corner cutting » du pathfinding, avec un PASSAGE unique au
+ * centre (cases laissées libres autour de 19,20). Les deux bases (haut-gauche /
+ * bas-droite) sont obligées d'y transiter — positionnement et tourelles décisifs.
+ */
+const BARRIER_CELLS: [number, number][] = [
+  // aile basse-gauche
+  [10, 29], [11, 28], [12, 27], [13, 26], [14, 25], [15, 24], [16, 23], [17, 22],
+  // — passage : 18,21 · 19,20 · 20,19 · 21,18 laissés libres —
+  // aile haute-droite
+  [22, 17], [23, 16], [24, 15], [25, 14], [26, 13], [27, 12], [28, 11], [29, 10],
+];
+
+function barrierProp(col: number, row: number, i: number): PropDef {
+  const even = i % 2 === 0;
+  return even
+    ? { key: "tree-a", col, row, ...TREE_PROP }
+    : { key: "rock-a", col, row, ...ROCK_PROP };
+}
+
 const PROPS: PropDef[] = [
-  // Base joueur (haut-gauche)
-  { key: "building-a", col: 6, row: 5, scale: 0.5, fw: 2, fh: 2, ox: 0.506, oy: 0.646 },
+  // Décor base joueur (haut-gauche) — le QG lui-même est un Building, pas un prop
   { key: "crate", col: 9, row: 6, scale: 0.4, fw: 1, fh: 1, ox: 0.5, oy: 0.62 },
   { key: "tree-b", col: 4, row: 9, ...TREE_PROP },
-  // Base ennemie (bas-droite)
-  { key: "building-b", col: 32, row: 32, scale: 0.5, fw: 2, fh: 2, ox: 0.506, oy: 0.646 },
+  // Décor base ennemie (bas-droite)
   { key: "crate", col: 30, row: 34, scale: 0.4, fw: 1, fh: 1, ox: 0.5, oy: 0.62 },
   { key: "tree-a", col: 35, row: 30, ...TREE_PROP },
-  // Barrière/décor central en diagonale (avec un passage vers row ~20)
-  { key: "tree-a", col: 18, row: 14, ...TREE_PROP },
-  { key: "rock-a", col: 19, row: 16, ...ROCK_PROP },
-  { key: "tree-b", col: 20, row: 18, ...TREE_PROP },
-  { key: "tree-a", col: 22, row: 23, ...TREE_PROP },
-  { key: "rock-a", col: 23, row: 25, ...ROCK_PROP },
-  { key: "tree-b", col: 21, row: 27, ...TREE_PROP },
-  // Décor épars
-  { key: "rock-a", col: 11, row: 28, ...ROCK_PROP },
-  { key: "tree-b", col: 28, row: 10, ...TREE_PROP },
-  { key: "tree-a", col: 13, row: 21, ...TREE_PROP },
-  { key: "rock-a", col: 27, row: 23, ...ROCK_PROP },
+  // Décor épars (hors lignes de passage)
+  { key: "rock-a", col: 11, row: 14, ...ROCK_PROP },
+  { key: "tree-b", col: 28, row: 25, ...TREE_PROP },
+  { key: "tree-a", col: 5, row: 20, ...TREE_PROP },
+  { key: "rock-a", col: 34, row: 19, ...ROCK_PROP },
+  // Mur central à passage unique
+  ...BARRIER_CELLS.map(([c, r], i) => barrierProp(c, r, i)),
 ];
 
 const START_CELLS: Cell[] = [
@@ -159,6 +181,23 @@ export class GameScene extends Phaser.Scene {
   private ghostValid = false;
   private buildText!: Phaser.GameObjects.Text;
   private siegeTargets = new Map<Unit, Building>(); // ennemi -> bâtiment assiégé
+  /** Ordres explicites du joueur : unité -> bâtiment ennemi à détruire (clic droit). */
+  private attackOrders = new Map<Unit, Building>();
+
+  // Quartiers généraux & fin de partie
+  private playerHQ!: Building;
+  private enemyHQ!: Building;
+  private gameOver = false;
+  private objText!: Phaser.GameObjects.Text;
+  private overlayText!: Phaser.GameObjects.Text;
+
+  // IA ennemie (cf. content/ai.ts) : budget, vagues, réserve d'unités au campement
+  private aiBudget = 0;
+  private aiElapsed = 0; // temps écoulé depuis le début (ms)
+  private aiWaveTimer = 0; // temps depuis la dernière vague (ms)
+  private aiWaveNumber = 0; // nombre de vagues déjà lancées
+  private aiReserve = new Set<Unit>(); // unités ennemies au campement, en attente de vague
+  private aiDefenseFund = 0; // ferraille mise de côté par l'IA pour ses tourelles
 
   // FX de tir (tourelles) : segments éphémères
   private fxGfx!: Phaser.GameObjects.Graphics;
@@ -236,6 +275,11 @@ export class GameScene extends Phaser.Scene {
 
     for (const p of PROPS) this.placeProp(p);
 
+    // Quartiers généraux (vrais Buildings : PV + objectifs de victoire/défaite).
+    // Le QG joueur englobe la case-dépôt (depotAnchor) où la ferraille est rapportée.
+    this.playerHQ = this.spawnBuilding(PLAYER_HQ, { col: 6, row: 5 }, "player");
+    this.enemyHQ = this.spawnBuilding(ENEMY_HQ, { col: 32, row: 32 }, "enemy");
+
     for (let r = 0; r < 8; r++) {
       this.anims.create({
         key: `surv-idle-${r}`,
@@ -281,7 +325,9 @@ export class GameScene extends Phaser.Scene {
     });
     const enemyComp = ["rifle", "rifle", "heavy"];
     ENEMY_CELLS.forEach((c, i) => {
-      this.units.push(new Unit(this, this.grid, c, UNITS[enemyComp[i] ?? "rifle"], "enemy"));
+      const e = new Unit(this, this.grid, c, UNITS[enemyComp[i] ?? "rifle"], "enemy");
+      this.units.push(e);
+      this.aiReserve.add(e); // rejoindront la première vague
     });
 
     this.hpGfx = this.add.graphics().setDepth(90000);
@@ -306,20 +352,25 @@ export class GameScene extends Phaser.Scene {
   override update(_time: number, delta: number): void {
     this.panWithKeys(delta);
     this.edgeScroll(delta);
-    this.processCombat(delta);
-    this.processEnemySiege(delta);
-    this.processTurrets(delta);
-    this.processProduction(delta);
-    const sep = this.computeSeparation();
-    for (let i = 0; i < this.units.length; i++) {
-      this.units[i].update(delta, sep[i].x, sep[i].y);
+    if (!this.gameOver) {
+      this.processEnemyAI(delta);
+      this.processCombat(delta);
+      this.processEnemySiege(delta);
+      this.processPlayerSiege(delta);
+      this.processTurrets(delta);
+      this.processProduction(delta);
+      const sep = this.computeSeparation();
+      for (let i = 0; i < this.units.length; i++) {
+        this.units[i].update(delta, sep[i].x, sep[i].y);
+      }
+      this.processHarvest(delta);
+      this.resolveStuck(delta);
     }
-    this.processHarvest(delta);
-    this.resolveStuck(delta);
     this.drawPaths();
     this.drawSelection();
     this.drawHpBars();
     this.drawTurretFx(delta);
+    this.updateObjText();
     this.layoutHud();
   }
 
@@ -736,6 +787,8 @@ export class GameScene extends Phaser.Scene {
   private onUnitDead(u: Unit): void {
     this.selected = this.selected.filter((x) => x !== u);
     this.siegeTargets.delete(u);
+    this.attackOrders.delete(u);
+    this.aiReserve.delete(u);
     for (const [n, g] of this.groups) {
       if (g.includes(u)) this.groups.set(n, g.filter((x) => x !== u));
     }
@@ -830,6 +883,19 @@ export class GameScene extends Phaser.Scene {
     this.ghost.setTint(this.ghostValid ? 0x66ff88 : 0xff5566);
   }
 
+  /** Crée un bâtiment, bloque son footprint sur la grille de nav, l'enregistre. */
+  private spawnBuilding(def: BuildingDef, anchor: Cell, team: Team): Building {
+    const b = new Building(this, this.grid, def, anchor, team);
+    this.buildings.push(b);
+    for (let r = 0; r < def.rows; r++) {
+      for (let c = 0; c < def.cols; c++) {
+        this.nav.setBlocked(anchor.col + c, anchor.row + r, true);
+      }
+    }
+    this.drawBlocked();
+    return b;
+  }
+
   private tryPlace(p: Phaser.Input.Pointer): void {
     if (!this.buildMode) return;
     this.updateGhost(p);
@@ -837,13 +903,7 @@ export class GameScene extends Phaser.Scene {
     const def = this.buildMode;
     this.stock.scrap -= def.cost;
     this.updateResourceText();
-    this.buildings.push(new Building(this, this.grid, def, this.ghostCell));
-    for (let r = 0; r < def.rows; r++) {
-      for (let c = 0; c < def.cols; c++) {
-        this.nav.setBlocked(this.ghostCell.col + c, this.ghostCell.row + r, true);
-      }
-    }
-    this.drawBlocked();
+    this.spawnBuilding(def, this.ghostCell, "player");
     this.updateGhost(p); // reste en mode construction (Échap / clic droit pour sortir)
   }
 
@@ -855,16 +915,21 @@ export class GameScene extends Phaser.Scene {
     }
     this.drawBlocked();
     for (const [u, tgt] of this.siegeTargets) if (tgt === b) this.siegeTargets.delete(u);
+    for (const [u, tgt] of this.attackOrders) if (tgt === b) this.attackOrders.delete(u);
     if (this.selectedBuilding === b) this.setSelectedBuilding(null);
     this.buildings = this.buildings.filter((x) => x !== b);
     b.sprite.destroy();
+    // QG détruit = fin de partie
+    if (b === this.enemyHQ) this.endGame(true);
+    else if (b === this.playerHQ) this.endGame(false);
   }
 
-  private nearestEnemyTo(x: number, y: number, range: number): Unit | null {
+  /** Unité vivante du camp `team` la plus proche d'un point, dans `range`. */
+  private nearestUnitOfTeam(x: number, y: number, range: number, team: Team): Unit | null {
     let best: Unit | null = null;
     let bestD = range * range;
     for (const o of this.units) {
-      if (o.dead || o.team !== "enemy") continue;
+      if (o.dead || o.team !== team) continue;
       const d = (o.body.x - x) ** 2 + (o.body.y - y) ** 2;
       if (d < bestD) {
         bestD = d;
@@ -878,7 +943,7 @@ export class GameScene extends Phaser.Scene {
     let best: Building | null = null;
     let bestD = range * range;
     for (const b of this.buildings) {
-      if (b.dead) continue;
+      if (b.dead || b.team !== "player") continue;
       const d = (b.x - x) ** 2 + (b.y - y) ** 2;
       if (d < bestD) {
         bestD = d;
@@ -888,14 +953,15 @@ export class GameScene extends Phaser.Scene {
     return best;
   }
 
-  /** Tourelles : acquièrent l'ennemi le plus proche à portée et tirent (hitscan). */
+  /** Tourelles : acquièrent l'unité adverse la plus proche à portée et tirent (hitscan). */
   private processTurrets(delta: number): void {
     for (const b of this.buildings) {
       if (b.dead || !b.def.turret) continue;
       const spec = b.def.turret;
       b.cooldown -= delta;
       if (b.cooldown > 0) continue;
-      const foe = this.nearestEnemyTo(b.x, b.y, spec.range);
+      const foeTeam: Team = b.team === "player" ? "enemy" : "player";
+      const foe = this.nearestUnitOfTeam(b.x, b.y, spec.range, foeTeam);
       if (!foe) continue;
       b.cooldown = spec.cooldown;
       this.shots.push({ x1: b.x, y1: b.y - 46, x2: foe.body.x, y2: foe.body.y - 34, ttl: 90 });
@@ -923,30 +989,218 @@ export class GameScene extends Phaser.Scene {
           continue;
         }
       }
-      const dx = b.x - u.body.x;
-      const dy = b.y - u.body.y;
-      const dist = Math.hypot(dx, dy);
-      if (dist <= u.def.range + 36) {
-        if (u.isMoving) u.stop();
-        u.faceTo(dx, dy);
-        u.attacking = true;
-        u.combatTimer -= delta;
-        if (u.combatTimer <= 0) {
-          u.combatTimer = u.def.attackCd;
-          if (b.takeDamage(u.def.damage)) this.onBuildingDead(b);
-        }
-      } else {
+      this.siegeStep(u, b, delta);
+    }
+  }
+
+  /**
+   * Ordres explicites du joueur : les unités envoyées sur un bâtiment ennemi
+   * (clic droit) s'en approchent et le frappent — symétrique du siège ennemi.
+   * Détruire le QG ennemi via ce mécanisme = victoire.
+   */
+  private processPlayerSiege(delta: number): void {
+    for (const [u, b] of this.attackOrders) {
+      if (u.dead || b.dead) {
+        this.attackOrders.delete(u);
+        if (u.dead) continue;
         u.attacking = false;
-        const tcell = worldToCell(this.grid, b.x, b.y);
-        const key = this.cellKey(tcell.col, tcell.row);
-        if (key !== u.chaseKey || !u.isMoving) {
-          u.chaseKey = key;
-          const approach = this.adjacentFreeCell(b.cell.col, b.cell.row, u.cell, null) ?? tcell;
-          const path = findPath(this.nav, u.cell, approach);
-          if (path) u.setPath(path);
+        continue;
+      }
+      // engager une unité ennemie reste prioritaire (auto-défense en chemin)
+      if (u.attackTarget && !u.attackTarget.dead) continue;
+      this.siegeStep(u, b, delta);
+    }
+  }
+
+  /**
+   * Une unité s'approche d'un bâtiment et le frappe quand elle est à portée.
+   * Mutualisé entre siège ennemi (auto) et ordres d'attaque joueur (explicites).
+   */
+  private siegeStep(u: Unit, b: Building, delta: number): void {
+    const dx = b.x - u.body.x;
+    const dy = b.y - u.body.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist <= u.def.range + 36) {
+      if (u.isMoving) u.stop();
+      u.faceTo(dx, dy);
+      u.attacking = true;
+      u.combatTimer -= delta;
+      if (u.combatTimer <= 0) {
+        u.combatTimer = u.def.attackCd;
+        if (isRanged(u.def)) {
+          this.shots.push({ x1: u.body.x, y1: u.body.y - 36, x2: b.x, y2: b.y - 40, ttl: 80 });
+        }
+        if (b.takeDamage(u.def.damage)) this.onBuildingDead(b);
+      }
+    } else {
+      u.attacking = false;
+      const tcell = worldToCell(this.grid, b.x, b.y);
+      const key = this.cellKey(tcell.col, tcell.row);
+      if (key !== u.chaseKey || !u.isMoving) {
+        u.chaseKey = key;
+        const approach = this.adjacentFreeCell(b.cell.col, b.cell.row, u.cell, null) ?? tcell;
+        const path = findPath(this.nav, u.cell, approach);
+        if (path) u.setPath(path);
+      }
+    }
+  }
+
+  // --- IA ennemie (cf. content/ai.ts) ---
+
+  /**
+   * Adversaire autonome : accumule un budget, achète des unités au QG ennemi, et
+   * lance périodiquement des VAGUES d'assaut vers le QG joueur. La pression monte
+   * (budget + effectif) à chaque vague. Simple mais crédible (priorité plan #4).
+   */
+  private processEnemyAI(delta: number): void {
+    if (this.enemyHQ.dead) return;
+    this.aiElapsed += delta;
+    if (this.aiElapsed < ENEMY_AI.startDelay) return;
+
+    // Budget (revenu passif, croissant avec les vagues déjà lancées)
+    const rate = ENEMY_AI.budgetPerSec + ENEMY_AI.budgetGrowthPerWave * this.aiWaveNumber;
+    this.aiBudget += (rate * delta) / 1000;
+
+    // Fonds défensif (séparé) : l'IA fortifie son QG avec des tourelles
+    this.aiDefenseFund += (ENEMY_AI.defense.fundPerSec * delta) / 1000;
+    this.aiTryBuildTurret();
+
+    // Achat : la plus chère abordable de la composition (un achat par frame max)
+    if (this.aiReserve.size < 40) {
+      for (const id of ENEMY_AI.composition) {
+        const cost = UNITS[id].cost;
+        if (this.aiBudget >= cost) {
+          this.aiBudget -= cost;
+          this.spawnEnemyUnit(id);
+          break;
         }
       }
     }
+
+    // Déclenchement de vague
+    this.aiWaveTimer += delta;
+    const targetSize = Math.min(
+      ENEMY_AI.firstWaveSize + ENEMY_AI.waveSizeGrowth * this.aiWaveNumber,
+      ENEMY_AI.maxWaveSize,
+    );
+    const intervalReady = this.aiWaveNumber === 0 || this.aiWaveTimer >= ENEMY_AI.waveInterval;
+    if (intervalReady && this.aiReserve.size >= targetSize) this.launchWave();
+  }
+
+  private spawnEnemyUnit(unitId: string): void {
+    const hq = this.enemyHQ;
+    const exit: Cell = { col: hq.cell.col, row: hq.cell.row - 1 }; // vers la carte
+    const spot = this.freeCellsAround(exit, 1)[0] ?? exit;
+    const u = new Unit(this, this.grid, spot, UNITS[unitId], "enemy");
+    this.units.push(u);
+    this.aiReserve.add(u);
+  }
+
+  /** Nombre de tourelles ennemies actuellement debout. */
+  private enemyTurretCount(): number {
+    let n = 0;
+    for (const b of this.buildings) {
+      if (!b.dead && b.team === "enemy" && b.def.turret) n++;
+    }
+    return n;
+  }
+
+  /**
+   * L'IA fortifie son QG : dès qu'elle a de quoi payer une tourelle et qu'il en
+   * manque, elle en pose une sur le flanc exposé (vers le centre de la carte, d'où
+   * viennent les assauts joueur). Rend la prise du QG ennemi non triviale.
+   */
+  private aiTryBuildTurret(): void {
+    const turret = BUILDINGS.find((b) => b.id === "turret");
+    if (!turret) return;
+    if (this.enemyTurretCount() >= ENEMY_AI.defense.maxTurrets) return;
+    if (this.aiDefenseFund < turret.cost) return;
+    const spot = this.findEnemyTurretSpot(turret);
+    if (!spot) return;
+    this.aiDefenseFund -= turret.cost;
+    this.spawnBuilding(turret, spot, "enemy");
+  }
+
+  /**
+   * Cherche un emplacement valide pour une tourelle ennemie, sur le flanc du QG
+   * tourné vers la menace (cases de col/row inférieures au QG), en anneaux croissants.
+   */
+  private findEnemyTurretSpot(def: BuildingDef): Cell | null {
+    const hq = this.enemyHQ.cell;
+    const radius = ENEMY_AI.defense.turretRadius;
+    for (let d = 2; d <= radius; d++) {
+      for (let dr = -d; dr <= d; dr++) {
+        for (let dc = -d; dc <= d; dc++) {
+          if (Math.max(Math.abs(dr), Math.abs(dc)) !== d) continue; // anneau de Chebyshev
+          // flanc exposé uniquement (vers le centre/joueur)
+          if (dc > 0 && dr > 0) continue;
+          const anchor: Cell = { col: hq.col + dc, row: hq.row + dr };
+          if (this.canPlace(def, anchor)) return anchor;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Envoie l'essentiel de la réserve vers le QG joueur, mais GARDE une garnison au
+   * campement (elle défend passivement le QG via l'aggro auto). Évite la base vide
+   * après chaque assaut, qui rendait une contre-attaque joueur trop facile.
+   */
+  private launchWave(): void {
+    this.aiWaveNumber += 1;
+    this.aiWaveTimer = 0;
+
+    const reserve = [...this.aiReserve].filter((u) => !u.dead);
+    const def = ENEMY_AI.defense;
+    let keep = Math.floor(reserve.length * def.garrisonRatio);
+    if (reserve.length > def.minGarrison) keep = Math.max(keep, def.minGarrison);
+    const assault = reserve.slice(0, reserve.length - keep);
+    const garrison = reserve.slice(reserve.length - keep);
+
+    const hq = this.playerHQ;
+    for (const u of assault) {
+      u.attackTarget = null;
+      const approach =
+        this.adjacentFreeCell(hq.cell.col, hq.cell.row, u.cell, null) ??
+        { col: hq.cell.col, row: hq.cell.row + hq.def.rows };
+      const path = findPath(this.nav, u.cell, approach);
+      if (path) u.setPath(path);
+    }
+
+    // La garnison reste en réserve pour la prochaine vague (et défend en attendant).
+    this.aiReserve.clear();
+    for (const u of garrison) this.aiReserve.add(u);
+  }
+
+  // --- Fin de partie ---
+
+  private endGame(win: boolean): void {
+    if (this.gameOver) return;
+    this.gameOver = true;
+    if (this.buildMode) this.cancelBuild();
+    this.overlayText.setText(win ? "VICTOIRE" : "DÉFAITE");
+    this.overlayText.setColor(win ? "#9dffa8" : "#ff8a8a");
+    this.overlayText.setVisible(true);
+  }
+
+  private updateObjText(): void {
+    if (this.gameOver) {
+      this.objText.setText("");
+      return;
+    }
+    if (this.aiElapsed < ENEMY_AI.startDelay) {
+      const t = Math.ceil((ENEMY_AI.startDelay - this.aiElapsed) / 1000);
+      this.objText.setText(`🎯 Ennemi en préparation (${t}s) · Objectif : détruire le QG ennemi`);
+      return;
+    }
+    const next = Math.max(0, Math.ceil((ENEMY_AI.waveInterval - this.aiWaveTimer) / 1000));
+    const turrets = this.enemyTurretCount();
+    const def = turrets > 0 ? ` · défenses ennemies : ${turrets}🗼` : "";
+    this.objText.setText(
+      `🎯 Vagues lancées : ${this.aiWaveNumber} · campement ennemi : ${this.aiReserve.size}` +
+        `${def} · prochaine ~${next}s · Objectif : QG ennemi`,
+    );
   }
 
   private drawTurretFx(delta: number): void {
@@ -1269,16 +1523,17 @@ export class GameScene extends Phaser.Scene {
       this.setSelectedBuilding(null);
       return;
     }
-    // pas d'unité sous le curseur : tente la sélection d'un bâtiment
-    const b = this.buildingAt(w.x, w.y);
+    // pas d'unité sous le curseur : tente la sélection d'un bâtiment joueur
+    const b = this.buildingAt(w.x, w.y, "player");
     this.selected = [];
     this.setSelectedBuilding(b);
   }
 
-  private buildingAt(x: number, y: number): Building | null {
+  private buildingAt(x: number, y: number, team?: Team): Building | null {
     const cell = worldToCell(this.grid, x, y);
     for (const b of this.buildings) {
       if (b.dead) continue;
+      if (team !== undefined && b.team !== team) continue;
       const inFootprint =
         cell.col >= b.cell.col &&
         cell.col < b.cell.col + b.def.cols &&
@@ -1366,7 +1621,19 @@ export class GameScene extends Phaser.Scene {
     if (foe) {
       for (const u of this.selected) {
         this.clearJob(u);
+        this.attackOrders.delete(u);
         u.attackTarget = foe;
+      }
+      return;
+    }
+
+    // Clic sur un bâtiment ennemi (ex. QG) -> ordre de siège
+    const eb = this.buildingAt(w.x, w.y, "enemy");
+    if (eb) {
+      for (const u of this.selected) {
+        this.clearJob(u);
+        u.attackTarget = null;
+        this.attackOrders.set(u, eb);
       }
       return;
     }
@@ -1374,15 +1641,19 @@ export class GameScene extends Phaser.Scene {
     // Clic sur un gisement -> ordre de récolte
     const node = this.nodeAt(goal, w);
     if (node) {
-      for (const u of this.selected) this.assignHarvest(u, node);
+      for (const u of this.selected) {
+        this.attackOrders.delete(u);
+        this.assignHarvest(u, node);
+      }
       return;
     }
 
-    // Sinon déplacement de groupe (annule la récolte en cours)
+    // Sinon déplacement de groupe (annule la récolte et l'ordre d'attaque en cours)
     if (!this.nav.isWalkable(goal.col, goal.row)) return;
     const dests = this.freeCellsAround(goal, this.selected.length);
     this.selected.forEach((u, i) => {
       this.clearJob(u);
+      this.attackOrders.delete(u);
       u.attackTarget = null;
       const dest = dests[i] ?? goal;
       const path = findPath(this.nav, u.cell, dest);
@@ -1413,15 +1684,31 @@ export class GameScene extends Phaser.Scene {
     this.buildText = panel(14, "#e6caff");
     this.updateBuildText();
 
+    this.objText = panel(15, "#ffd9a0");
+    this.updateObjText();
+
+    this.overlayText = this.add
+      .text(0, 0, "", {
+        fontFamily: "monospace",
+        fontSize: "64px",
+        color: "#ffffff",
+        backgroundColor: "#000000bb",
+        padding: { x: 32, y: 20 },
+        align: "center",
+      })
+      .setOrigin(0.5, 0.5)
+      .setDepth(2000000)
+      .setVisible(false);
+
     this.helpText = this.add
       .text(
         0,
         0,
         [
           "Sélection : clic · glisser · Maj+clic ajoute      Groupes : Ctrl+[1-9] puis [1-9]",
-          "Clic droit : déplacer · récolter · attaquer      Construire : C caserne · B tourelle · N mur (Échap annule)",
-          "Caserne sélectionnée : R/F/V produit · clic droit = ralliement      Caméra : bords · flèches · clic-molette · molette",
-          "G : grille      H : afficher/masquer cette aide",
+          "Clic droit : déplacer · récolter · attaquer (unité ou QG ennemi)      Construire : C caserne · B tourelle · N mur (Échap annule)",
+          "Caserne/QG sélectionné : R/F/V produit · clic droit = ralliement      Caméra : bords · flèches · clic-molette · molette",
+          "Objectif : détruire le QG ennemi · ne perds pas le tien      G : grille   H : aide",
         ],
         {
           fontFamily: "monospace",
@@ -1459,7 +1746,15 @@ export class GameScene extends Phaser.Scene {
     }
     place(this.prodText, 12, 52);
     place(this.buildText, 12, 52 + this.prodText.height + 6);
+    place(this.objText, 12, 52 + this.prodText.height + 6 + this.buildText.height + 6);
     this.helpText.setVisible(this.helpVisible);
     if (this.helpVisible) place(this.helpText, 12, cam.height - this.helpText.height - 12);
+
+    // Overlay de fin : centré écran, contre-scalé
+    if (this.overlayText.visible) {
+      this.overlayText.setScale(inv);
+      const c = cam.getWorldPoint(cam.width / 2, cam.height / 2);
+      this.overlayText.setPosition(c.x, c.y);
+    }
   }
 }

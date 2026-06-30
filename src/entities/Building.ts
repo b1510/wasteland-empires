@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { cellToWorld, type Cell, type IsoGrid } from "@/world/iso";
 import type { BuildingDef } from "@/content/buildings";
+import type { Team } from "@/entities/Unit";
 
 /**
  * Bâtiment posé sur la grille (Phase 2).
@@ -11,6 +12,7 @@ import type { BuildingDef } from "@/content/buildings";
  */
 export class Building {
   readonly def: BuildingDef;
+  readonly team: Team;
   /** Coin haut-gauche du footprint. */
   readonly cell: Cell;
   readonly sprite: Phaser.GameObjects.Image;
@@ -25,8 +27,15 @@ export class Building {
   /** Point de ralliement des unités produites. */
   rally: Cell | null = null;
 
-  constructor(scene: Phaser.Scene, grid: IsoGrid, def: BuildingDef, cell: Cell) {
+  constructor(
+    scene: Phaser.Scene,
+    grid: IsoGrid,
+    def: BuildingDef,
+    cell: Cell,
+    team: Team = "player",
+  ) {
     this.def = def;
+    this.team = team;
     this.cell = { ...cell };
     this.maxHp = def.hp;
     this.hp = def.hp;
