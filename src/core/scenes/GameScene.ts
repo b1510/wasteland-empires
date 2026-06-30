@@ -352,6 +352,10 @@ export class GameScene extends Phaser.Scene {
     this.addNode("fuel", 25, 15, NODE_AMOUNT);
     this.addNode("water", 9, 23, NODE_AMOUNT);
     this.addNode("water", 30, 17, NODE_AMOUNT);
+    // Gisements flanquant le passage du choke (hors cases de barrière/passage) :
+    // point de contestation direct, juste devant le verrou, des deux côtés.
+    this.addNode("scrap", 16, 21, NODE_AMOUNT);
+    this.addNode("scrap", 23, 18, NODE_AMOUNT);
 
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.setupCamera();

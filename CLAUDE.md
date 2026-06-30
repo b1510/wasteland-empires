@@ -59,9 +59,10 @@ Alias d'import : `@/*` → `src/*`.
   - **Types d'unités** data-driven (`content/units.ts`) : récupérateur (R, rapide/fragile), fusilier (F, à distance + FX de tir), costaud (V, lent/tanky). Stats par type (hp/vitesse/dégâts/portée/cooldown) ; teinte de rôle côté joueur. Caserne produit une file mixte (R/F/V).
   - **HUD refait** : chips ressources colorées, bandeau prod (caserne sélectionnée), aide togglable (H). **Lisible à tout zoom** (`layoutHud` : ancrage écran + contre-scale 1/zoom chaque frame).
   - **QG + objectif de victoire/défaite** : QG joueur/ennemi posés d'office (`PLAYER_HQ`/`ENEMY_HQ`), détruire le QG ennemi = victoire (clic droit dessus = ordre de siège), perdre le sien = défaite (overlay de fin).
-  - **Carte avec vrai choke point** : barrière centrale en anti-diagonale étanche (col+row = 39), passage unique au centre — oblige à transiter par un point défendable entre les deux bases.
+  - **Carte avec vrai choke point** : barrière centrale en anti-diagonale étanche (col+row = 39), passage unique au centre — oblige à transiter par un point défendable entre les deux bases. **2 gisements de ferraille flanquent le passage** (16,21 et 23,18, hors cases de mur/passage — connectivité vérifiée) : point de contestation directe devant le verrou.
   - **Silhouettes distinctes par type d'unité** : échelle propre à chaque type (`UnitDef.scale` : récupérateur plus petit, costaud plus massif) + **badge de forme** au-dessus de chaque unité (cercle/carré/losange, `UnitDef.badge`) en complément de la teinte de rôle, faute d'art distinct disponible (spritesheet toujours partagé).
-- ⬜ **Reste Phase 2** : calage visuel fin des décors (ox/oy de crate/building-b/tree-a/fuel approximés), première carte vraiment travaillée au-delà du simple choke (zones de couvert, points d'intérêt secondaires).
+  - **Équilibrage IA** (`content/ai.ts`) : délai de démarrage allongé (90s), garnison de départ allégée (plus de costaud d'entrée de jeu), revenu/croissance budget ralentis — évite de mettre un nouveau joueur face à une vague écrasante avant d'avoir pu poser une économie.
+- ⬜ **Reste Phase 2** : calage visuel fin des décors (ox/oy de crate/building-b/tree-a/fuel approximés — nécessite un retour visuel, non vérifiable en headless).
 
 ### Assets (état)
 - **Terrain/décor** : pack "Golbanc Homestead" (Starlight Furnace), iso. Cartes faites main (pas de procédural).

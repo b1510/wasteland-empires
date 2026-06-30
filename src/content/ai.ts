@@ -55,19 +55,19 @@ export interface EnemyAIConfig {
 }
 
 export const ENEMY_AI: EnemyAIConfig = {
-  startDelay: 70000,
-  budgetPerSec: 4,
-  budgetGrowthPerWave: 1.2,
+  startDelay: 90000,
+  budgetPerSec: 3,
+  budgetGrowthPerWave: 0.9,
   firstWaveSize: 2,
   waveSizeGrowth: 1,
-  maxWaveSize: 12,
-  waveInterval: 55000,
+  maxWaveSize: 10,
+  waveInterval: 65000,
   composition: ["heavy", "rifle", "scout"],
   defense: {
-    garrisonRatio: 0.35,
+    garrisonRatio: 0.4,
     minGarrison: 2,
     maxTurrets: 3,
-    fundPerSec: 3,
+    fundPerSec: 2.5,
     turretRadius: 4,
   },
 };
