@@ -58,3 +58,21 @@ export const RESOURCES: Record<ResourceType, ResourceDef> = {
 };
 
 export const RESOURCE_TYPES = Object.keys(RESOURCES) as ResourceType[];
+
+/** Coût multi-ressources (bâtiments, unités) : seules les ressources requises sont listées. */
+export type Cost = Partial<Record<ResourceType, number>>;
+
+export function canAfford(stock: Record<ResourceType, number>, cost: Cost): boolean {
+  return RESOURCE_TYPES.every((t) => stock[t] >= (cost[t] ?? 0));
+}
+
+export function payCost(stock: Record<ResourceType, number>, cost: Cost): void {
+  for (const t of RESOURCE_TYPES) stock[t] -= cost[t] ?? 0;
+}
+
+/** Formatte un coût pour le HUD, ex. "20⛏ 5⛽" (ressources nulles omises). */
+export function formatCost(cost: Cost): string {
+  return RESOURCE_TYPES.filter((t) => cost[t])
+    .map((t) => `${cost[t]}${RESOURCES[t].icon}`)
+    .join(" ");
+}

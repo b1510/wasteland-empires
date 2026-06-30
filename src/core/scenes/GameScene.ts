@@ -18,7 +18,14 @@ import {
   ENEMY_HQ,
   type BuildingDef,
 } from "@/content/buildings";
-import { RESOURCES, RESOURCE_TYPES, type ResourceType } from "@/content/resources";
+import {
+  RESOURCES,
+  RESOURCE_TYPES,
+  canAfford,
+  payCost,
+  formatCost,
+  type ResourceType,
+} from "@/content/resources";
 import { UNITS, isRanged } from "@/content/units";
 import { ENEMY_AI } from "@/content/ai";
 
@@ -323,7 +330,10 @@ export class GameScene extends Phaser.Scene {
     START_CELLS.forEach((c, i) => {
       this.units.push(new Unit(this, this.grid, c, UNITS[startComp[i] ?? "scout"], "player"));
     });
-    const enemyComp = ["rifle", "rifle", "heavy"];
+    // Garnison de départ volontairement légère (pas de costaud) : ce sont ces unités
+    // qui composeront la toute première vague, avant même que l'IA ait pu acheter quoi
+    // que ce soit — éviter de mettre un nouveau joueur face à un costaud dès le début.
+    const enemyComp = ["scout", "scout", "rifle"];
     ENEMY_CELLS.forEach((c, i) => {
       const e = new Unit(this, this.grid, c, UNITS[enemyComp[i] ?? "rifle"], "enemy");
       this.units.push(e);
@@ -657,13 +667,13 @@ export class GameScene extends Phaser.Scene {
     this.updateProdText();
   }
 
-  /** Met un type d'unité en file sur la caserne sélectionnée (débite la ferraille). */
+  /** Met un type d'unité en file sur la caserne sélectionnée (débite ses ressources). */
   private queueUnit(unitId: string): void {
     const b = this.selectedBuilding;
     if (!b || b.dead || !b.def.produces?.includes(unitId)) return;
     const def = UNITS[unitId];
-    if (this.stock.scrap < def.cost) return;
-    this.stock.scrap -= def.cost;
+    if (!canAfford(this.stock, def.cost)) return;
+    payCost(this.stock, def.cost);
     this.updateResourceText();
     b.queue.push(unitId);
     this.updateProdText();
@@ -684,7 +694,7 @@ export class GameScene extends Phaser.Scene {
     const b = this.selectedBuilding;
     if (b && !b.dead && b.def.produces) {
       const menu = b.def.produces
-        .map((id) => `${UNITS[id].hotkey}:${UNITS[id].name}(${UNITS[id].cost})`)
+        .map((id) => `${UNITS[id].hotkey}:${UNITS[id].name}(${formatCost(UNITS[id].cost)})`)
         .join("  ");
       let status = "—";
       if (b.queue.length > 0) {
@@ -813,6 +823,7 @@ export class GameScene extends Phaser.Scene {
       this.hpGfx.fillRect(x - 1, y - 1, w + 2, h + 2);
       this.hpGfx.fillStyle(u.team === "enemy" ? 0xff5555 : 0x55dd55, 1);
       this.hpGfx.fillRect(x, y, w * ratio, h);
+      this.drawUnitBadge(u, x + w / 2, y - 8);
     }
     // Bâtiments : barre affichée seulement s'ils sont endommagés
     for (const b of this.buildings) {
@@ -827,6 +838,36 @@ export class GameScene extends Phaser.Scene {
       this.hpGfx.fillRect(x - 1, y - 1, w + 2, h + 2);
       this.hpGfx.fillStyle(0x66ccff, 1);
       this.hpGfx.fillRect(x, y, w * ratio, h);
+    }
+  }
+
+  /**
+   * Badge de forme au-dessus de l'unité (cercle/carré/losange selon `def.badge`) :
+   * identification rapide du type au combat, en complément de la teinte — le
+   * spritesheet étant partagé entre les 3 types (aucun art distinct disponible).
+   */
+  private drawUnitBadge(u: Unit, cx: number, cy: number): void {
+    const r = 5;
+    const color = u.team === "enemy" ? 0xff8a7a : (u.def.tint ?? 0xffffff);
+    this.hpGfx.fillStyle(0x000000, 0.55);
+    this.hpGfx.fillCircle(cx, cy, r + 1.5);
+    this.hpGfx.fillStyle(color, 1);
+    switch (u.def.badge) {
+      case "circle":
+        this.hpGfx.fillCircle(cx, cy, r);
+        break;
+      case "square":
+        this.hpGfx.fillRect(cx - r, cy - r, r * 2, r * 2);
+        break;
+      case "diamond":
+        this.hpGfx.beginPath();
+        this.hpGfx.moveTo(cx, cy - r);
+        this.hpGfx.lineTo(cx + r, cy);
+        this.hpGfx.lineTo(cx, cy + r);
+        this.hpGfx.lineTo(cx - r, cy);
+        this.hpGfx.closePath();
+        this.hpGfx.fillPath();
+        break;
     }
   }
 
@@ -879,7 +920,7 @@ export class GameScene extends Phaser.Scene {
     const cw = cellToWorld(this.grid, fc, fr);
     this.ghost.setPosition(cw.x, cw.y).setDepth(95000);
     this.ghostCell = anchor;
-    this.ghostValid = this.canPlace(def, anchor) && this.stock.scrap >= def.cost;
+    this.ghostValid = this.canPlace(def, anchor) && canAfford(this.stock, def.cost);
     this.ghost.setTint(this.ghostValid ? 0x66ff88 : 0xff5566);
   }
 
@@ -901,7 +942,7 @@ export class GameScene extends Phaser.Scene {
     this.updateGhost(p);
     if (!this.ghostValid) return;
     const def = this.buildMode;
-    this.stock.scrap -= def.cost;
+    payCost(this.stock, def.cost);
     this.updateResourceText();
     this.spawnBuilding(def, this.ghostCell, "player");
     this.updateGhost(p); // reste en mode construction (Échap / clic droit pour sortir)
@@ -1065,10 +1106,11 @@ export class GameScene extends Phaser.Scene {
     this.aiDefenseFund += (ENEMY_AI.defense.fundPerSec * delta) / 1000;
     this.aiTryBuildTurret();
 
-    // Achat : la plus chère abordable de la composition (un achat par frame max)
+    // Achat : la plus chère abordable de la composition (un achat par frame max).
+    // L'IA ne gère qu'un budget ferraille (pas d'économie carburant/eau séparée).
     if (this.aiReserve.size < 40) {
       for (const id of ENEMY_AI.composition) {
-        const cost = UNITS[id].cost;
+        const cost = UNITS[id].cost.scrap ?? 0;
         if (this.aiBudget >= cost) {
           this.aiBudget -= cost;
           this.spawnEnemyUnit(id);
@@ -1114,10 +1156,11 @@ export class GameScene extends Phaser.Scene {
     const turret = BUILDINGS.find((b) => b.id === "turret");
     if (!turret) return;
     if (this.enemyTurretCount() >= ENEMY_AI.defense.maxTurrets) return;
-    if (this.aiDefenseFund < turret.cost) return;
+    const turretCost = turret.cost.scrap ?? 0;
+    if (this.aiDefenseFund < turretCost) return;
     const spot = this.findEnemyTurretSpot(turret);
     if (!spot) return;
-    this.aiDefenseFund -= turret.cost;
+    this.aiDefenseFund -= turretCost;
     this.spawnBuilding(turret, spot, "enemy");
   }
 
@@ -1218,7 +1261,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateBuildText(): void {
-    const list = BUILDINGS.map((b) => `${b.hotkey}:${b.name}(${b.cost})`).join("  ");
+    const list = BUILDINGS.map((b) => `${b.hotkey}:${b.name}(${formatCost(b.cost)})`).join("  ");
     const cur = this.buildMode
       ? ` — ${this.buildMode.name} : clic gauche pose · clic droit/Échap annule`
       : "";

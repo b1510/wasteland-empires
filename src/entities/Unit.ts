@@ -63,7 +63,7 @@ export class Unit {
     this.body = scene.add
       .sprite(w.x, w.y, `${this.animBase}-idle-${this.facing}`)
       .setOrigin(0.485, 0.695)
-      .setScale(SCALE);
+      .setScale(SCALE * def.scale);
     this.body.setDepth(w.y);
     this.lastX = w.x;
     this.lastY = w.y;

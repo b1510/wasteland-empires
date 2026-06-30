@@ -8,6 +8,8 @@
  * `range` ≥ ~120 px ⇒ unité « à distance » (feedback visuel de tir).
  */
 
+import type { Cost } from "@/content/resources";
+
 export interface UnitDef {
   id: string;
   name: string;
@@ -15,8 +17,8 @@ export interface UnitDef {
   animBase: string;
   /** Touche de production quand une caserne est sélectionnée. */
   hotkey: string;
-  /** Coût en ferraille. */
-  cost: number;
+  /** Coût en ressources (ferraille + éventuellement carburant/eau). */
+  cost: Cost;
   /** Temps de production (ms). */
   buildTime: number;
   maxHp: number;
@@ -29,6 +31,10 @@ export interface UnitDef {
   attackCd: number;
   /** Teinte de rôle (sprite joueur). */
   tint?: number;
+  /** Multiplicateur de taille du sprite (silhouette distincte malgré le spritesheet partagé). */
+  scale: number;
+  /** Forme du badge affiché au-dessus de l'unité (identification rapide). */
+  badge: "circle" | "square" | "diamond";
 }
 
 export const UNITS: Record<string, UnitDef> = {
@@ -37,7 +43,7 @@ export const UNITS: Record<string, UnitDef> = {
     name: "Récupérateur",
     animBase: "surv",
     hotkey: "R",
-    cost: 20,
+    cost: { scrap: 20, fuel: 5 },
     buildTime: 2500,
     maxHp: 45,
     speed: 300,
@@ -45,13 +51,15 @@ export const UNITS: Record<string, UnitDef> = {
     range: 90,
     attackCd: 600,
     tint: 0xb9f0c4,
+    scale: 0.85,
+    badge: "circle",
   },
   rifle: {
     id: "rifle",
     name: "Fusilier",
     animBase: "surv",
     hotkey: "F",
-    cost: 35,
+    cost: { scrap: 35, water: 5 },
     buildTime: 4000,
     maxHp: 70,
     speed: 230,
@@ -59,13 +67,15 @@ export const UNITS: Record<string, UnitDef> = {
     range: 155,
     attackCd: 750,
     tint: 0xffe8b0,
+    scale: 1,
+    badge: "square",
   },
   heavy: {
     id: "heavy",
     name: "Costaud",
     animBase: "surv",
     hotkey: "V",
-    cost: 60,
+    cost: { scrap: 60, fuel: 15, water: 5 },
     buildTime: 6000,
     maxHp: 140,
     speed: 165,
@@ -73,6 +83,8 @@ export const UNITS: Record<string, UnitDef> = {
     range: 95,
     attackCd: 1000,
     tint: 0xb8ccff,
+    scale: 1.25,
+    badge: "diamond",
   },
 };
 

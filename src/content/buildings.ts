@@ -8,6 +8,8 @@
  * `ox`/`oy`/`scale` = calage visuel du sprite (repris du calibrage des props iso).
  */
 
+import type { Cost } from "@/content/resources";
+
 export interface TurretSpec {
   /** Portée de tir en pixels monde. */
   range: number;
@@ -27,8 +29,8 @@ export interface BuildingDef {
   scale: number;
   ox: number;
   oy: number;
-  /** Coût en ferraille. */
-  cost: number;
+  /** Coût en ressources (ferraille + éventuellement carburant/eau). */
+  cost: Cost;
   hp: number;
   /** Touche de raccourci pour entrer en mode construction. */
   hotkey: string;
@@ -52,7 +54,7 @@ export const BUILDINGS: BuildingDef[] = [
     scale: 0.5,
     ox: 0.506,
     oy: 0.646,
-    cost: 60,
+    cost: { scrap: 60 },
     hp: 320,
     hotkey: "C",
     tint: 0xa8c8ff,
@@ -67,7 +69,7 @@ export const BUILDINGS: BuildingDef[] = [
     scale: 0.5,
     ox: 0.506,
     oy: 0.646,
-    cost: 40,
+    cost: { scrap: 40, fuel: 10 },
     hp: 220,
     hotkey: "B",
     tint: 0xffb0a0,
@@ -82,7 +84,7 @@ export const BUILDINGS: BuildingDef[] = [
     scale: 0.4,
     ox: 0.495,
     oy: 0.625,
-    cost: 10,
+    cost: { scrap: 10 },
     hp: 160,
     hotkey: "N",
   },
@@ -106,7 +108,7 @@ export const PLAYER_HQ: BuildingDef = {
   scale: 0.5,
   ox: 0.506,
   oy: 0.646,
-  cost: 0,
+  cost: {},
   hp: 900,
   hotkey: "",
   tint: 0x9fd0ff,
@@ -123,7 +125,7 @@ export const ENEMY_HQ: BuildingDef = {
   scale: 0.5,
   ox: 0.506,
   oy: 0.646,
-  cost: 0,
+  cost: {},
   hp: 1100,
   hotkey: "",
   tint: 0xff8a7a,
